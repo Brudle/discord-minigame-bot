@@ -9,7 +9,7 @@ emojis["cross"] = "\N{CROSS MARK}"
 
 class Game:
 
-    def __init__(self, bot, channel, creator, game, maxplayers=None):
+    def __init__(self, channel, creator, game, maxplayers=None):
         self.bot = bot
         self.channel = channel
         self.creator = creator
@@ -31,7 +31,7 @@ class Game:
         self.embed.add_field(name="Creator Commands", value=(
         "```{0}invite <user(s)>\n"
         "{0}kick   <user(s)>```"
-        ).format(self.bot.command_prefix), inline=False)
+        ).format("!bm "), inline=False)
         space = "\u200b    "
         self.embed.add_field(name="Reaction", value=(
         emojis["tick"]+"\n"+\
@@ -135,8 +135,8 @@ class GameCog(Cog):
                         await game.undo_decline(user)
 
     @command()
-    async def game(self, ctx, gamename="none", users: Greedy[discord.Member]=None):
-        game = Game(self.bot, ctx.channel, ctx.author, gamename)
+    async def game(self, ctx, gamename, users: Greedy[discord.Member]=None):
+        game = Game(ctx.channel, ctx.author, gamename)
         await game.update_lobby()
         games.append(game)
         if users:
