@@ -1,6 +1,6 @@
 import discord
 from discord.ext import commands
-import game, misc
+import game, battleships, misc
 
 intents = discord.Intents.default()
 intents.members = True
@@ -11,6 +11,7 @@ intents.guild_messages = True
 
 bot = commands.Bot(command_prefix='!bm ',  intents=intents)
 bot.add_cog(game.GameCog(bot))
+bot.add_cog(battleships.BattleshipsCog(bot))
 bot.add_cog(misc.MiscCog(bot))
 
 @bot.event

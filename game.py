@@ -9,45 +9,45 @@ emojis["cross"] = "\N{CROSS MARK}"
 
 class Game:
 
-    def __init__(self, channel, creator, game, maxplayers=None):
-        self.bot = bot
+    def __init__(self, channel, creator, maxplayers=None):
         self.channel = channel
         self.creator = creator
-        self.game = game
         self.maxplayers = maxplayers
         self.players = {creator}
         self.invited = set()
         self.declined = set()
+        self.reaction_messages = []
 
     async def update_lobby(self):
-        self.embed = discord.Embed(title=self.game,
+        embed = discord.Embed(title="Battleships Lobby",
         description="invitation response can be changed any number of times",
         colour=discord.Colour.green())
-        self.embed.add_field(name="Players", value="\n".join([p.name for p in self.players]), inline=True)
+        embed.add_field(name="Players", value="\n".join([p.name for p in self.players]), inline=True)
         if self.invited:
-            self.embed.add_field(name="Invited", value=("\n".join([p.name for p in self.invited])), inline=True)
+            embed.add_field(name="Invited", value=("\n".join([p.name for p in self.invited])), inline=True)
         if self.declined:
-            self.embed.add_field(name="Declined", value=("\n".join([p.name for p in self.declined])), inline=True)
-        self.embed.add_field(name="Creator Commands", value=(
+            embed.add_field(name="Declined", value=("\n".join([p.name for p in self.declined])), inline=True)
+        embed.add_field(name="Creator Commands", value=(
         "```{0}invite <user(s)>\n"
         "{0}kick   <user(s)>```"
         ).format("!bm "), inline=False)
         space = "\u200b    "
-        self.embed.add_field(name="Reaction", value=(
+        embed.add_field(name="Reaction", value=(
         emojis["tick"]+"\n"+\
         emojis["cross"]), inline=True)
-        self.embed.add_field(name="Creator", value=(
+        embed.add_field(name="Creator", value=(
         "start the game\n"
         "cancel the game"), inline=True)
-        self.embed.add_field(name="Invitee", value=(
+        embed.add_field(name="Invitee", value=(
         "accept an invite\n"
         "decline an invite"), inline=True)
         try:
-            await self.lobby.edit(embed=self.embed)
+            await self.lobby.edit(embed=embed)
         except AttributeError:
-            self.lobby = await self.channel.send(embed=self.embed)
+            self.lobby = await self.channel.send(embed=embed)
         await self.lobby.add_reaction(emojis["tick"])
         await self.lobby.add_reaction(emojis["cross"])
+        self.reaction_messages.append(self.lobby)
 
     async def invite(self, player):
         if player in self.players:
@@ -95,6 +95,7 @@ class Game:
 
     async def start(self):
         await self.channel.send("game starting")
+        await self.play()
 
     async def cancel(self):
         await self.channel.send("game cancelled")
@@ -108,7 +109,7 @@ class GameCog(Cog):
     async def on_reaction_add(self, reaction, user):
         if user != self.bot.user:
             for game in games:
-                if game.lobby == reaction.message:
+                if reaction.message == game.lobby:
                     if user == game.creator:
                         if reaction.emoji == emojis["tick"]:
                             await game.start()
@@ -119,29 +120,24 @@ class GameCog(Cog):
                             await game.accept_invite(user)
                         elif reaction.emoji == emojis["cross"]:
                             await game.decline_invite(user)
-
-    async def cog_command_error(self, ctx, error):
-        print(ctx)
-        traceback.print_exc()
+                elif reaction.message in game.reaction_messages:
+                    await game.add_reaction(reaction, user)
 
     @Cog.listener()
     async def on_reaction_remove(self, reaction, user):
         if user != self.bot.user:
             for game in games:
-                if game.lobby == reaction.message:
+                if reaction.message in game.reaction_messages:
+                    await game.remove_reaction(reaction, user)
+                elif reaction.message == game.lobby:
                     if reaction.emoji == emojis["tick"]:
                         await game.undo_accept(user)
                     elif reaction.emoji == emojis["cross"]:
                         await game.undo_decline(user)
 
-    @command()
-    async def game(self, ctx, gamename, users: Greedy[discord.Member]=None):
-        game = Game(ctx.channel, ctx.author, gamename)
-        await game.update_lobby()
-        games.append(game)
-        if users:
-            for user in users:
-                await game.invite(user)
+    async def cog_command_error(self, ctx, error):
+        print(ctx)
+        traceback.print_exc()
 
     @command()
     async def invite(self, ctx, users: Greedy[discord.Member]):
