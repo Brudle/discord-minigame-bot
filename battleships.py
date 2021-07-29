@@ -1,18 +1,10 @@
 import discord
 from discord.ext.commands import command, Cog, Greedy
 import random
+import collections
 from game import Game, games
 
 emojis = {
-1: "\N{DIGIT ONE}",
-2: "\N{DIGIT TWO}",
-3: "\N{DIGIT THREE}",
-4: "\N{DIGIT FOUR}",
-5: "\N{DIGIT FIVE}",
-6: "\N{DIGIT SIX}",
-7: "\N{DIGIT SEVEN}",
-8: "\N{DIGIT EIGHT}",
-9: "\N{DIGIT NINE}",
 10: "\N{KEYCAP TEN}",
 "A": "\N{REGIONAL INDICATOR SYMBOL LETTER A}",
 "B": "\N{REGIONAL INDICATOR SYMBOL LETTER B}",
@@ -34,16 +26,19 @@ emojis = {
 "DA": "\N{DOWNWARDS BLACK ARROW}",
 "LA": "\N{LEFTWARDS BLACK ARROW}",
 "RA": "\N{UPWARDS BLACK ARROW}",
-"back": "\N{BLACK LEFT-POINTING DOUBLE TRIANGLE WITH VERTICAL BAR}",
+"back": "\N{LEFTWARDS ARROW WITH HOOK}",
 "tick": "\N{WHITE HEAVY CHECK MARK}",
 "cross": "\N{CROSS MARK}"
 }
+
+for i in range(10):
+    emojis[i] = f"{i}\N{COMBINING ENCLOSING KEYCAP}"
 
 class Battleships(Game):
 
     def __init__(self, *args):
         super().__init__(*args, maxplayers=2)
-        self.empty_board = {chr(c): ["BE" for i in range(10)] for c in range(65, 76)}
+        self.empty_board = {chr(c): ["BE" for i in range(10)] for c in range(65, 75)}
         self.boards = {}
         self.ships_to_place = {}
         self.ships = {}
@@ -52,110 +47,129 @@ class Battleships(Game):
         self.choosing_row = {}
         self.choosing_column = {}
         self.choosing_orientation = {}
+        self.chose_orientation = {}
         self.confirming_placement = {}
+        self.choosing_row = {}
         self.chose_row = {}
+        self.choosing_column = {}
         self.chose_column = {}
 
     async def play(self):
         self.turn = random.randint(0, 1)
         for player in self.players:
             self.boards[player] = self.empty_board.copy()
-            self.ships_to_place[player] = [("Battleship", 5), ("Cruiser", 3)]
+            self.ships_to_place[player] = collections.deque([("Battleship", 5), ("Cruiser", 3)])
             self.ships[player] = []
             await self.place_next_ship(player)
 
     async def place_next_ship(self, player):
         self.placing_ship[player], self.placing_ship_size[player] =\
         self.ships_to_place[player].popleft()
-        embed = discord.Embed(title="Place Your {ship}")
-        message = await player.send(embed=embed)
-        await self.choose_row(player, player, message, embed)
+        await self.choose_row(player)
 
     def print_board(self, board):
-        return (f"{emojis['BK']}") + (f"{emojis[i]}" for i in range(10)) + "\n" +\
-        ((f"{emojis[chr(c)]}" + f"{emojis[board[c][i]]}" + "\n") for c in range(65, 76) for i in range(10))
+        return (f"{emojis['BK']}") + ("".join(f"{emojis[i]}" for i in range(1, 11))) + "\n" +\
+        ("\n".join(f"{emojis[chr(c)]}" + ("".join(f"{emojis[board[chr(c)][i]]}" for i in range(10))) for c in range(65, 75)))
 
-    async def add_reaction(self, reaction, user):
+    async def reaction_add(self, reaction, user):
         for player in self.players:
             if player == user:
                 if self.choosing_row[player] == reaction.message:
                     self.choosing_row[player] = None
+                    self.reaction_messages.remove(reaction.message)
                     for c in range(65, 76):
-                        if emojis[chr[c]] ==  reaction.emoji:
+                        if emojis[chr(c)] ==  reaction.emoji:
                             self.boards[player][chr(c)] = ["P" for i in range(10)]
                             self.chose_row[player] = chr(c)
-                            await self.choose_column(player, player, reaction.message)
+                            await self.choose_column(player, reaction.message)
                             break
                 elif self.choosing_column[player] == reaction.message:
                     self.choosing_column[player] = None
+                    self.reaction_messages.remove(reaction.message)
                     if reaction.emoji == emojis["back"]:
                         for i in range(10):
-                            if self.boards[player][player.chose_row][i] != "P":
-                                self.board[player][player.chose_row] = "BE"
+                            if self.boards[player][self.chose_row[player]][i] != "P":
+                                self.boards[player][self.chose_row[player]] = "BE"
                         self.chose_row[player] = None
-                        await self.choose_row(player, player, message)
+                        await self.choose_row(player, reaction.message)
                         break
                     for i in range(1, 11):
                         if emojis[i] == reaction.emoji:
-                            player.board[player.chose_row] = ["BE" for j in range(10) if i != j]
-                            player.chose_column = i
-                            await self.choose_orientation(player, player, reaction.message)
+                            for j in range(10):
+                                if j != (i - 1):
+                                    self.boards[player][self.chose_row[player]][j] = "BE"
+                            self.chose_column[player] = i
+                            await self.choose_orientation(player, reaction.message)
                             break
-                elif player.choosing_orientation == reaction.message:
-                    player.choosing_orientation = None
+                elif self.choosing_orientation[player] == reaction.message:
+                    self.choosing_orientation[player] = None
+                    self.reaction_messages.remove(reaction.message)
                     if reaction.emoji == emojis["back"]:
                         for i in range(10):
-                            if player.board[player.chose_row][i] == "BE":
-                                player.board[player.chose_row][i] == "P"
+                            if self.boards[player][self.chose_row[player]][i] == "BE":
+                                self.boards[player][self.chose_row[player]][i] == "P"
                         break
                     for direction in ["UA", "DA", "LA", "RA"]:
-                        if emojis[direcion] == reaction.emoji:
-                            player.chose_direction = direction
+                        if emojis[direction] == reaction.emoji:
+                            self.chose_orientation[player] = direction
                             await self.confirm_placement(player, reaction.message)
-                elif player.confirming_placement == reaction_message:
-                    player.confirming_placement = None
+                elif self.confirming_placement[player] == reaction.message:
+                    self.confirming_placement[player] = None
+                    self.reaction_messages.remove(reaction.message)
                     if reaction.emoji == emojis["cross"]:
-                        self.reject_ship_placement(player.board, player.chose_row,
-                        player.chose_column, player.chose_direction, player.placing_ship_size)
-                        player.chose_direction = None
-                        await self.choose_orientation(player, message)
+                        self.reject_ship_placement(self.boards[player], self.chose_row[player],
+                        self.chose_column[player], self.chose_direction[player], self.placing_ship_size[player])
+                        self.chose_direction[player] = None
+                        await self.choose_orientation(player, reaction.message)
                     elif reaction.emoji == emojis["tick"]:
                         await self.place_next_ship(player)
 
-    async def choose_row(self, player, message):
-        player.choosing_row = message
-        embed.add_field(value=self.print_board(player.board))
-        await message.edit(embed=embed)
-        (await message.add_reaction(emojis[chr(c)]) for c in range(65, 76))
+    async def choose_row(self, player, message=None):
+        embed = discord.Embed(title=f"Place Your {self.placing_ship[player]}")
+        embed.add_field(name="Choose the Row", value=self.print_board(self.boards[player]))
+        if message:
+            await message.delete()
+        message = await player.send(embed=embed)
+        for c in range(65, 75):
+            await message.add_reaction(emojis[chr(c)])
+        self.choosing_row[player] = message
+        self.reaction_messages.append(message)
 
     async def choose_column(self, player, message):
-        embed = discord.Embed(title="Choose the Column")
-        embed.add_field(value=self.print_board(player.board))
-        await message.edit(embed=embed)
+        embed = discord.Embed(title=f"Place Your {self.placing_ship[player]}")
+        embed.add_field(name="Choose the Column", value=self.print_board(self.boards[player]))
+        await message.delete()
+        message = await player.send(embed=embed)
         await message.add_reaction(emojis["back"])
-        (await message.add_reaction(emojis[i] for i in range(1, 11)))
-        player.choosing_column = message
+        for i in range(1, 11):
+            await message.add_reaction(emojis[i])
+        self.choosing_column[player] = message
+        self.reaction_messages.append(message)
 
     async def choose_orientation(self, player, message):
-        embed = discord.Embed(title="Choose the orientation of your {ship}")
-        embed.add_field(value=self.print_board(player.board))
-        await message.edit(embed=embed)
+        embed = discord.Embed(title=f"Place Your {self.placing_ship[player]}")
+        embed.add_field(name="Choose the Orientation", value=self.print_board(self.boards[player]))
+        await message.delete()
+        message = await player.send(embed=embed)
         await message.add_reaction(emojis["back"])
         for direction in ["UA", "DA", "LA", "RA"]:
-            if self.valid_placement(player.board, player.chose_row. player,
-            chose_column, direction, player.placing_ship_size):
-                await message.add_reaction(emojis[direcion])
-        player.choosing_orientation = message
+            if self.valid_placement(self.boards[player], self.chose_row[player],
+            self.chose_column[player], direction, self.placing_ship_size[player]):
+                await message.add_reaction(emojis[direction])
+        self.choosing_orientation[player] = message
+        self.reaction_messages.append(message)
 
     async def confirm_placement(self, player, message):
-        self.place_ship(player.board, player.chose_row, player.chose_column,
-        player.chose_direction, player.placing_ship_size)
-        embed = discord.Embed(title="Confirm your {player.placing_ship} placement")
-        embed.add_field(value=self.print_board(player.board))
-        await message.edit(embed=embed)
+        self.place_ship(self.board[player], self.chose_row[player], self.chose_column[player],
+        self.chose_direction[player], self.placing_ship_size[player])
+        embed = discord.Embed(title=f"Place Your {self.placing_ship[player]}")
+        embed.add_field(name="Confirm the Placement", value=self.print_board(self.boards[player]))
+        await message.delete()
+        message = await player.send(embed=embed)
         await message.add_reaction(emojis["tick"])
         await message.add_rection(emojis["cross"])
-        player.confirming_placement = message
+        self.confirming_placement[player] = message
+        self.reaction_messages.append(message)
 
     def valid_placement(self, board, row, column, direction, size):
         directions = {

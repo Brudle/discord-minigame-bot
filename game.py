@@ -121,7 +121,7 @@ class GameCog(Cog):
                         elif reaction.emoji == emojis["cross"]:
                             await game.decline_invite(user)
                 elif reaction.message in game.reaction_messages:
-                    await game.add_reaction(reaction, user)
+                    await game.reaction_add(reaction, user)
 
     @Cog.listener()
     async def on_reaction_remove(self, reaction, user):
