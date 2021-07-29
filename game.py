@@ -128,7 +128,7 @@ class GameCog(Cog):
         if user != self.bot.user:
             for game in games:
                 if reaction.message in game.reaction_messages:
-                    await game.remove_reaction(reaction, user)
+                    await game.reaction_remove(reaction, user)
                 elif reaction.message == game.lobby:
                     if reaction.emoji == emojis["tick"]:
                         await game.undo_accept(user)

@@ -10,8 +10,8 @@ class MiscCog(Cog):
         self.bot = bot
 
     @command()
-    async def emojiname(self, emoji):
-        await self.bot.say(get_name(emoji))
+    async def emojiname(self, ctx, emoji):
+        await ctx.send(get_name(emoji))
 
 def get_name(s):
     return s.encode('ascii', 'namereplace')
