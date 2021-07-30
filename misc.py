@@ -17,5 +17,13 @@ class MiscCog(Cog):
     async def mycolour(self, ctx):
         await ctx.send(ctx.author.colour)
 
+    @command()
+    async def name(self, ctx):
+        await ctx.send(ctx.author.name)
+
+    @command()
+    async def nickname(self, ctx):
+        await ctx.send(ctx.author.nick)
+
 def get_name(s):
     return s.encode('ascii', 'namereplace')
