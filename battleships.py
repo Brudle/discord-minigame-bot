@@ -300,7 +300,7 @@ class BattleshipsBoard:
             y = chr(ord(row)+i*BattleshipsBoard.directionCoords[direction][1])
             if y in self.board and x >= 1 and x <= 10:
                 for ship in ships:
-                    if (y, x) in ship:
+                    if (y, x) in ships[ship]:
                         return False
             else:
                 return False
@@ -388,7 +388,7 @@ class Battleships(Game):
             self.turn = not self.turn
             self.current_turn = self.battleships_players[self.turn]
             embed = discord.Embed(title=f"Round {self.round}")
-            self.channel.send(embed=embed)
+            await self.channel.send(embed=embed)
             await self.current_turn.choose_row()
         else:
             if not self.winner:
