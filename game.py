@@ -9,14 +9,16 @@ emojis["cross"] = "\N{CROSS MARK}"
 
 class Game:
 
-    def __init__(self, channel, creator, maxplayers=None):
+    def __init__(self, channel, creator, minplayers=None, maxplayers=None):
         self.channel = channel
         self.creator = creator
+        self.minplayers = minplayers
         self.maxplayers = maxplayers
         self.players = {creator}
         self.invited = set()
         self.declined = set()
         self.reaction_messages = []
+        self.lobby_done = False
 
     async def update_lobby(self):
         embed = discord.Embed(title="Battleships Lobby",
@@ -94,10 +96,17 @@ class Game:
         await self.update_lobby()
 
     async def start(self):
-        await self.channel.send("game starting")
-        await self.play()
+        if len(self.players) < self.minplayers:
+            await self.channel.send("not enough players")
+        elif len(self.players) > self.maxplayers:
+            await self.channel.send("too many players")
+        else:
+            await self.channel.send("game starting")
+            self.lobby_done = True
+            await self.play()
 
     async def cancel(self):
+        self.lobby_done = True
         await self.channel.send("game cancelled")
 
 class GameCog(Cog):
@@ -109,7 +118,7 @@ class GameCog(Cog):
     async def on_reaction_add(self, reaction, user):
         if user != self.bot.user:
             for game in games:
-                if reaction.message == game.lobby:
+                if reaction.message == game.lobby and not game.lobby_done:
                     if user == game.creator:
                         if reaction.emoji == emojis["tick"]:
                             await game.start()
@@ -129,7 +138,7 @@ class GameCog(Cog):
             for game in games:
                 if reaction.message in game.reaction_messages:
                     await game.reaction_remove(reaction, user)
-                elif reaction.message == game.lobby:
+                elif reaction.message == game.lobby and not game.lobby_done:
                     if reaction.emoji == emojis["tick"]:
                         await game.undo_accept(user)
                     elif reaction.emoji == emojis["cross"]:
@@ -143,7 +152,7 @@ class GameCog(Cog):
     async def invite(self, ctx, users: Greedy[discord.Member]):
         if users:
             for game in games:
-                if game.creator == ctx.author:
+                if game.creator == ctx.author and not game.lobby_done:
                     for user in users:
                         await game.invite(user)
 
@@ -151,6 +160,6 @@ class GameCog(Cog):
     async def kick(self, ctx, users: Greedy[discord.Member]):
         if users:
             for game in games:
-                if game.creator == ctx.author:
+                if game.creator == ctx.author and not game.lobby_done:
                     for user in users:
                         await game.kick(user)
