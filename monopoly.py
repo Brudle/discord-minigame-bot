@@ -5,16 +5,35 @@ import random
 import collections
 from game import Game, games
 import asyncio
-from PIL import Image, ImageDraw
+from PIL import Image, ImageDraw, ImageColor
 import io
 
 class MonopolyGame(Game):
 
     def __init__(self, *args):
         super().__init__(*args, minplayers=2, maxplayers=6)
+        self.board = MonopolyBoard(self)
         self.monopoly_players = []
         self.choosing_colours = False
         self.deciding_order = False
+        self.turn = 0
+        self.current_turn = None
+
+        self.properties = {}
+
+        with open("properties.txt", "r") as file:
+
+            property_txt = file.readlines()
+
+        for i in range(28):
+
+            square = int(property_txt[i*6].strip())
+            name = property_txt[i*6+1].strip()
+            price = int(property_txt[i*6+2].strip())
+            rent = [int(x) for x in property_txt[i*6+3].strip().split(".")]
+            group = property_txt[i*6+4].strip()
+
+            self.properties[square] = MonopolyProperty(self, name,price,rent,group)
 
     async def play(self):
         for player in self.players:
@@ -39,12 +58,30 @@ class MonopolyGame(Game):
                     break
             else:
                 self.choosing_colours = False
-                self.deciding_order = True
-                self.rolling = self.monopoly_players.copy()
-                embed = discord.Embed(title="Roll for the turn order", description="click the die")
-                message = await self.channel.send(embed=embed)
-                await message.add_reaction("\N{GAME DIE}")
-                self.reaction_messages.append(message)
+                # self.deciding_order = True
+                # self.rolling = self.monopoly_players.copy()
+                # embed = discord.Embed(title="Roll for the turn order", description="click the die")
+                # message = await self.channel.send(embed=embed)
+                # await message.add_reaction("\N{GAME DIE}")
+                # self.reaction_messages.append(message)
+                for i, player in enumerate(self.monopoly_players):
+                    player.set_place(i)
+                await self.new_turn()
+
+    async def new_turn(self):
+        self.current_turn = self.monopoly_players[self.turn]
+        self.rolling = [self.current_turn]
+        embed = discord.Embed(title="Your Turn", colour=self.current_turn.colour)
+        embed.set_author(name=self.current_turn.user.name, icon_url=self.current_turn.user.avatar_url)
+        self.board.update()
+        with open("images/upload.png", "rb") as upload:
+            file = discord.File(upload, "board.png")
+            embed.set_image(url="attachment://board.png")
+            message = await self.channel.send(embed=embed, file=file)
+        await message.add_reaction("\N{GAME DIE}")
+        self.reaction_messages.append(message)
+        self.turn += 1
+        self.turn %= len(self.monopoly_players)
 
     async def reaction_add(self, reaction, user):
         for player in self.monopoly_players:
@@ -61,15 +98,32 @@ class MonopolyGame(Game):
         roll2 = random.randint(1, 6)
         await player.rolled(roll1, roll2)
 
+        if self.deciding_order:
+            pass
+        else:
+            player.move(roll1 + roll2)
+            if player.square in self.properties:
+                await self.properties[player.square].display()
+            await self.new_turn()
+
 class MonopolyPlayer:
 
     def __init__(self, user, game):
         self.user = user
         self.game = game
         self.colour = None
+        self.place = None
+        self.square = 0
 
     def set_colour(self, colour):
         self.colour = colour
+
+    def set_place(self, place):
+        self.place = place
+
+    def move(self, amount):
+        self.square += amount
+        self.square %= 40
 
     async def rolled(self, roll1, roll2):
         tw = 1000
@@ -82,17 +136,20 @@ class MonopolyPlayer:
         w, h = face.size
         image.paste(face, (tw-w, 0, tw, h))
         image = image.resize((400, 200))
-        image.save("images/dupload.png", "PNG", optimize=True)
-        embed = discord.Embed(title=f"Rolled a {roll1+roll2}", colour=self.colour)
+        image.save("images/upload.png", "PNG", optimize=True)
+        embed = discord.Embed(title=f"Rolled {roll1+roll2}", colour=self.colour)
         embed.set_author(name=self.user.name, icon_url=self.user.avatar_url)
-        with open("images/dupload.png", "rb") as upload:
+        with open("images/upload.png", "rb") as upload:
             file = discord.File(upload, "dice.png")
             embed.set_image(url="attachment://dice.png")
             await self.game.channel.send(embed=embed, file=file)
 
 class MonopolyBoard:
 
-    def pos(self,square, d):
+    def __init__(self, game):
+        self.game = game
+
+    def pos(self, square, d):
         if square == 0:
             y = 695
             x = 695
@@ -137,14 +194,14 @@ class MonopolyBoard:
             x = 31
         return x,y
 
-    async def update(self):
+    def update(self):
         d = 20
         board = Image.open("images/board.jpg").convert("RGBA")
         draw = ImageDraw.Draw(board)
-        for p in list(self.game.playersd.values()):
-            square = p.square
-            i = p.place
-            colour = p.colour
+        for player in self.game.monopoly_players:
+            square = player.square
+            i = player.place
+            colour = player.colour.to_rgb()
             x,y = self.pos(square, d)
             xc = i%2
             yc = i//2
@@ -193,9 +250,9 @@ class MonopolyBoard:
         for p in self.game.properties:
             prop = self.game.properties[p]
             square = p
-            x,y = self.pos(p,18)
+            x,y = self.pos(p, 18)
             if prop.owner != None:
-                colour = self.game.playersd[prop.owner].colour
+                colour = prop.owner.colour.to_rgb()
                 cw = 65
                 ch = 8
                 if square in [1,3,5,6,8,9]:
@@ -291,19 +348,79 @@ class MonopolyBoard:
                     x1 = x0+dd[1]
                     y1 = y0+dd[0]
                 draw.rectangle([x0,y0,x1,y1], fill=colour, outline="black", width=1)
-        board1 = board.crop((0,0,800,400))
-        board2 = board.crop((0,400,800,800))
-        board1.resize((1200,600))
-        board2.resize((1200,600))
-        board1.save("images/upload1.png", "PNG", optimize=True)
-        board2.save("images/upload2.png", "PNG", optimize=True)
-        with open("images/upload1.png", "rb") as upload1, open("images/upload2.png", "rb") as upload2:
-            bfiles = [discord.File(upload1, "board1.png"), discord.File(upload2, "board2.png")]
-            await self.channel.send(files=bfiles)
+        board.save("images/upload.png", "PNG", optimize=True)
+        # board1 = board.crop((0,0,800,400))
+        # board2 = board.crop((0,400,800,800))
+        # board1.resize((1200,600))
+        # board2.resize((1200,600))
+        # board1.save("images/upload1.png", "PNG", optimize=True)
+        # board2.save("images/upload2.png", "PNG", optimize=True)
+        # with open("images/upload1.png", "rb") as upload1, open("images/upload2.png", "rb") as upload2:
+        #     bfiles = [discord.File(upload1, "board1.png"), discord.File(upload2, "board2.png")]
+        #     await self.channel.send(files=bfiles)
         
 ##        board.save("images/upload.png", "PNG", optimize=True)
 ##        with open("images/upload.png", "rb") as upload:
 ##            await self.channel.send(file=discord.File(upload, "board.png"))
+
+class MonopolyProperty:
+
+    def __init__(self, game, name, price, rent, group):
+        self.game = game
+        self.name = name
+        self.price = price
+        self.rent = rent
+        self.group = group
+        try:
+            self.house_price = {"brown":50,"light blue":50,"pink":100,"orange":100,"red":150,"yellow":150,"green":200,"dark blue":200}[self.group]
+        except KeyError:
+            self.house_price = None
+        self.mortgaged = False
+        self.owner = None
+        self.houses = 0
+        self.hotel = False
+
+    async def display(self):
+        embed = discord.Embed(title=self.name)
+        if self.group == "station":
+            embed.colour = discord.Colour.default()
+            embed.description = ("""
+Title Deed: %s\n
+Rent: M25
+If 2 stations are owned: M50
+If 3 stations are owned: M100
+If 4 stations are owned: M200\n
+mortgage value: M100"""%(self.name))
+
+        elif self.group == "utility":
+            embed.colour = discord.Colour.from_rgb(255, 255, 255)
+            embed.description = ("""
+Title Deed: %s\n
+If one "Utility" is owned, rent
+is 4 times amount shown
+on dice.\n
+If both "Utilities" are owned,
+rent is 10 times amount
+shown on dice.\n
+mortgage value: M75"""%(self.name))
+        else:
+            embed.colour = discord.Colour.from_rgb(*ImageColor.getrgb(self.group.replace(" ", "")))
+            embed.description = f"""
+Title Deed: {self.name}\n
+Rent - site only: M{self.rent[0]}
+with 1 house: M{self.rent[1]}
+with 2 houses: M{self.rent[2]}
+with 3 houses: M{self.rent[3]}
+with 4 houses: M{self.rent[4]}
+with a hotel: M{self.rent[5]}
+cost of houses: M{self.house_price}
+hotel: M{self.house_price} plus 4 houses\n
+mortgage value: M{self.price/2}"""
+        if self.owner:
+            embed.set_author(name=self.owner.user.name, icon_url=self.owner.user.avatar_url)
+        else:
+            embed.set_author(name="No Owner")
+        await self.game.channel.send(embed=embed)
 
 class Monopoly(Cog):
 
