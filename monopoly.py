@@ -72,6 +72,7 @@ class MonopolyGame(Game):
 
     async def new_turn(self):
         self.current_turn = self.monopoly_players[self.turn]
+        self.current_turn.rolled_this_turn = False
         self.rolling = [self.current_turn]
         embed = discord.Embed(title="Your Turn", colour=self.current_turn.colour)
         embed.set_author(name=self.current_turn.user.name, icon_url=self.current_turn.user.avatar_url)
@@ -84,7 +85,7 @@ class MonopolyGame(Game):
         for player in self.monopoly_players:
             if player.user == user:
 
-                if reaction.emoji == "\N{GAME DIE}" and player in self.rolling:
+                if reaction.emoji == "\N{GAME DIE}" and player in self.rolling and not player.rolled_this_turn:
                     await self.roll(player)
 
                 elif reaction.message == self.unowned_property_react and player == self.current_turn:
@@ -120,6 +121,7 @@ class MonopolyGame(Game):
         if self.deciding_order:
             pass
         else:
+            player.rolled_this_turn = True
             if roll1 == roll2:
                 player.double_count += 1
                 embed = discord.Embed(title="Rolled Doubles!", colour=player.colour)
@@ -184,7 +186,7 @@ class MonopolyGame(Game):
             await self.new_turn()
         elif len(self.auction_participants) == 0 or (len(self.auction_participants) == 1 and self.auction_participants[0] == self.auction_winner):
             self.auction_underway = False
-            embed = discord.Embed(title="Won the Auction")
+            embed = discord.Embed(title="Won the Auction", colour=self.auction_winner.colour)
             embed.set_author(name=self.auction_winner.user.name, icon_url=self.auction_winner.user.avatar_url)
             await self.channel.send(embed=embed)
             self.auction_message = None
@@ -224,6 +226,7 @@ class MonopolyPlayer:
         self.utilities = 0
         self.rent_message = None
         self.confirm_improvement_message = None
+        self.rolled_this_turn = False
 
     def set_colour(self, colour):
         self.colour = colour
@@ -261,16 +264,10 @@ class MonopolyPlayer:
                 await message.add_reaction("\N{HAMMER}")
                 self.game.reaction_messages.append(message)
                 self.game.unowned_property_react = message
+            elif prop.owner == self:
+                await self.game.new_turn()
             else:
-                if prop.group == "station":
-                    self.rent = prop.rent[prop.owner.stations-1]
-                elif prop.group == "utility":
-                    self.rent = (4, 10)[prop.owner.utilities-1] * self.roll
-                else:
-                    if prop.hotel:
-                        self.rent = prop.rent[5]
-                    else:
-                        self.rent = prop.rent[prop.houses]
+                self.rent = prop.get_rent(self.roll)
                 embed = discord.Embed(title="Rent Due", description=f"M{self.rent}", colour=self.colour)
                 embed.add_field(name="React", value="\N{BANKNOTE WITH DOLLAR SIGN}\n\N{CROSS MARK}")
                 embed.add_field(name="Action", value="Pay the rent\nDeclare bankruptcy")
@@ -284,7 +281,7 @@ class MonopolyPlayer:
 
     async def pay_rent(self):
         if await self.withdraw(self.rent):
-            self.game.properties[self.square].owner.deposit(self.rent)
+            await self.game.properties[self.square].owner.deposit(self.rent)
             self.rent = 0
             self.game.reaction_messages.remove(self.rent_message)
             self.rent_message = None
@@ -298,7 +295,7 @@ class MonopolyPlayer:
             self.aquire(prop)
             self.game.unowned_property_react = None
             await self.game.new_turn()
-        if price:
+        elif price:
             await self.game.new_turn()
 
     def aquire(self, prop):
@@ -307,7 +304,7 @@ class MonopolyPlayer:
 
     def owns_group(self, group):
         for prop in self.game.properties:
-            p = self.game.properties[p]
+            p = self.game.properties[prop]
             if p.group == group and p.owner != self:
                 return False
         return True
@@ -600,7 +597,7 @@ class MonopolyBoard:
         elif square == 40:
             y = 695
             x = 31
-        return x,y
+        return x, y
 
     def update(self):
         d = 20
@@ -796,6 +793,10 @@ class MonopolyProperty:
 
     def set_owner(self, player):
         self.owner = player
+        if self.group == "station":
+            self.owner.stations += 1
+        elif self.group == "utlity":
+            self.owner.utilities += 1
 
     def can_buy_house(self):
         if self.houses < 4 and self.owner.owns_group(self.group):
@@ -823,6 +824,20 @@ class MonopolyProperty:
 
     def can_sell_hotel(self):
         return self.hotel
+
+    def get_rent(self, roll):
+        if self.group == "station":
+            return 25 * self.owner.stations
+        elif self.group == "utility":
+            return (4, 10)[self.owner.utilities-1] * roll
+        else:
+            if self.hotel:
+                return self.rent[5]
+            else:
+                if self.houses == 0 and self.owner.owns_group(self.group):
+                    return self.rent[0] * 2
+                else:
+                    return self.rent[self.houses]
 
     async def display(self):
         embed = discord.Embed(title=f"TITLE DEED\n{self.name.upper()}")
@@ -898,17 +913,17 @@ class Monopoly(Cog):
                         await game.bid(player, amount)
 
     @command()
-    async def buy(self, ctx, improvement: str=None, property: int=None):
+    async def buy(self, ctx, improvement: str=None, group: str=None, property: str=None):
         for game in games:
             if type(game) == MonopolyGame:
                 for player in game.monopoly_players:
                     if player.user == ctx.author:
-                        await player.buy(improvement, property)
+                        await player.buy(improvement, group, property)
 
     @command()
-    async def sell(self, ctx, improvement: str=None, property: int=None):
+    async def sell(self, ctx, improvement: str=None, group: str=None, property: str=None):
         for game in games:
             if type(game) == MonopolyGame:
                 for player in game.monopoly_players:
                     if player.user == ctx.author:
-                        await player.sell(improvement, property)
+                        await player.sell(improvement, group, property)
