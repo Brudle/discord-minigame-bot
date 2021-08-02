@@ -73,14 +73,17 @@ class MonopolyGame(Game):
 
     async def new_turn(self):
         self.current_turn = self.monopoly_players[self.turn]
-        self.current_turn.rolled_this_turn = False
-        self.rolling = [self.current_turn]
         embed = discord.Embed(title="Your Turn", colour=self.current_turn.colour)
         embed.set_author(name=self.current_turn.user.name, icon_url=self.current_turn.user.avatar_url)
         self.board.update()
         message = await self.board.display(embed)
-        await message.add_reaction("\N{GAME DIE}")
-        self.reaction_messages.append(message)
+        if self.current_turn.square == "jail":
+            self.current_turn.jail_update()
+        else:
+            self.current_turn.rolled_this_turn = False
+            self.rolling = [self.current_turn]
+            await message.add_reaction("\N{GAME DIE}")
+            self.reaction_messages.append(message)
 
     async def reaction_add(self, reaction, user):
         for player in self.monopoly_players:
@@ -114,6 +117,14 @@ class MonopolyGame(Game):
                 elif reaction.message == player.end_turn_message:
                     if reaction.emoji == "\N{WHITE HEAVY CHECK MARK}":
                         await player.end_turn()
+
+                elif reaction.message == player.jail_message:
+                    if reaction.emoji == "\N{GAME DIE}":
+                        await player.jail_choice("roll")
+                    elif reaction.emoji == "\N{BANKNOTE WITH DOLLAR SIGN}":
+                        await player.jail_choice("pay")
+                    elif reaction.emoji == "\N{TICKET}":
+                        await player.jail_choice("card")
 
     async def reaction_remove(self, user, reaction):
         pass
@@ -224,7 +235,7 @@ class MonopolyPlayer:
         self.portfolio = []
         self.double_count = 0
         self.balance = 1500
-        self.jail = False
+        self.turns_in_jail = 0
         self.rent = 0
         self.roll = 0
         self.stations = 0
@@ -233,6 +244,8 @@ class MonopolyPlayer:
         self.confirm_improvement_message = None
         self.rolled_this_turn = False
         self.end_turn_message = None
+        self.passed_go = False
+        self.has_goojfc = False
 
     def set_colour(self, colour):
         self.colour = colour
@@ -246,7 +259,7 @@ class MonopolyPlayer:
     async def move(self, amount):
         self.square += amount
         if self.square >= 40:
-            await self.passed_go()
+            self.passed_go = True
         self.square %= 40
         await self.evaluate_square()
 
@@ -272,6 +285,8 @@ class MonopolyPlayer:
         embed.set_author(name=self.user.name, icon_url=self.user.avatar_url)
         self.game.board.update()
         await self.game.board.display(embed)
+        if self.passed_go:
+            await self.pass_go()
 
         if self.square in self.game.properties:
             prop = self.game.properties[self.square]
@@ -299,6 +314,22 @@ class MonopolyPlayer:
                 await self.rent_message.add_reaction("\N{BANKNOTE WITH DOLLAR SIGN}")
                 await self.rent_message.add_reaction("\N{CROSS MARK}")
                 self.game.reaction_messages.append(self.rent_message)
+
+        elif self.square == 10:
+            embed = discord.Embed(title="JAIL", description="JUST VISITING", colour=discord.Colour.dark_gray())
+            await self.game.channel.send(embed=embed)
+            await self.confirm_end_turn()
+
+        elif self.square == 20:
+            embed = discord.Embed(title="FREE PARKING", colour=discord.Colour.from_rgb(255, 255, 255))
+            await self.game.channel.send(embed=embed)
+            await self.confirm_end_turn()
+
+        elif self.square == 30:
+            embed = discord.Embed(title="GO TO JAIL", colour=discord.Colour.dark_blue())
+            await self.game.channel.send(embed=embed)
+            await self.go_to_jail()
+
         else:
             await self.confirm_end_turn()
 
@@ -332,14 +363,72 @@ class MonopolyPlayer:
                 return False
         return True
 
-    async def passed_go(self):
-        embed = discord.Embed(title="Passed GO", description="Collect M200 salary", colour=self.colour)
+    async def pass_go(self):
+        embed = discord.Embed(title="Passed GO", colour=self.colour)
         embed.set_author(name=self.user.name, icon_url=self.user.avatar_url)
+        embed = discord.Embed(title="GO", description="Collect M200 salary as you pass", colour=discord.Colour.red())
         await self.game.channel.send(embed=embed)
         await self.deposit(200)
+        self.passed_go = False
 
     async def go_to_jail(self):
-        self.jail = True
+        self.set_square("jail")
+        embed = discord.Embed(title="", colour=self.colour)
+        embed.set_author(name=self.user.name, icon_url=self.user.avatar_url)
+        self.game.board.update()
+        await self.game.board.display(embed)
+        embed = discord.Embed(title="JAIL", description="IN JAIL", colour=discord.Colour.dark_gray())
+        await self.game.channel.send(embed=embed)
+        await self.confirm_end_turn()
+
+    async def jail_update(self):
+        embed = discord.Embed(title="IN JAIL", description=f"{3-self.turns_in_jail} rolls left to escape", colour=self.colour)
+        embed.add_field(name="React", value="\N{GAME DIE}\n\N{BANKNOTE WITH DOLLAR SIGN}\n\N{TICKET}")
+        embed.add_field(name="Action", value="Attempt to roll doubles\nPay the M50 fine\nUse the Get Out of Jail Free Card")
+        embed.set_author(name=self.user.name, icon_url=self.user.avatar_url)
+        self.jail_message = await self.channel.send(embed=embed)
+        self.game.reaction_messages.append(self.jail_message)
+
+    async def jail_choice(self, choice):
+        self.game.reaction_messages.remove(self.jail_message)
+        self.jail_message = None
+        if choice == "roll" and not self.turns_in_jail == 3:
+            roll1 = random.randint(1, 6)
+            roll2 = random.randint(1, 6)
+            await self.rolled(roll1, roll2)
+            if roll1 == roll2:
+                self.set_square(10)
+                self.turns_in_jail = 0
+                self.move(roll1 + roll2)
+                await self.evaluate_square()
+            else:
+                self.turns_in_jail += 1
+                if self.turns_in_jail == 3:
+                    embed = discord.Embed(title="Must Pay", description="Failed 3 attempts", colour=self.colour)
+                    embed.set_author(name=self.user.name, icon_url=self.user.avatar_url)
+                    self.jail_message = await self.game.channel.send(embed=embed)
+                    await self.fine_message.add_reaction("\N{BANKNOTE WITH DOLLAR SIGN}")
+                    await self.fine.message.add_reaction("\N{CROSS MARK}")
+                    self.game.react_messages.append(self.jail_message)
+                else:
+                    self.game.turn += 1
+                    self.game.turn %= len(self.game.monopoly_players)
+                    self.confirm_end_turn()
+        elif choice == "pay":
+            if await self.withdraw(50):
+                self.set_square(10)
+                if self.turns_in_jail == 3:
+                    self.move(self.roll)
+                    self.evaluate_square()
+                else:
+                    self.game.new_turn()
+                self.turns_in_jail = 0
+        elif choice == "card" and not self.turns_in_jail == 3:
+            if self.has_goojfc:
+                self.has_goojfc = False
+                self.set_square(10)
+                self.turns_in_jail = 0
+                self.game.new_turn()
 
     async def deposit(self, amount):
         embed = discord.Embed(title="Deposit", description=f"Received M{amount}", colour=self.colour)
@@ -617,7 +706,7 @@ class MonopolyBoard:
         elif square >= 38 and square < 40:
             y = 564+65*(square-38)
             x = 694
-        elif square == 40:
+        elif square == "jail":
             y = 695
             x = 31
         return x, y
