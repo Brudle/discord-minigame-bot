@@ -1,6 +1,7 @@
 import asyncio
 from asyncio.coroutines import iscoroutine
 import discord
+from discord import message
 from discord.ext.commands import command, Cog, Greedy
 import random
 import collections
@@ -21,6 +22,7 @@ class MonopolyGame(Game):
         self.current_turn = None
         self.unowned_property_react = None
         self.auction_message = None
+        self.collecting_message = None
 
         self.properties = {}
 
@@ -126,6 +128,23 @@ class MonopolyGame(Game):
                     elif reaction.emoji == "\N{TICKET}":
                         await player.jail_choice("card")
 
+                elif reaction.message == player.drawing_message:
+                    if reaction.emoji == "\N{BLACK QUESTION MARK ORNAMENT}":
+                        if player.drawing == "community":
+                            await player.draw_community_chest()
+                        elif player.drawing == "chance":
+                            await player.draw_chance()
+
+                elif reaction.message == self.collecting_message:
+                    if reaction.emoji == "\N{BANKNOTE WITH DOLLAR SIGN}":
+                        await self.paid_collection(player)
+                    elif reaction.emoji == "\N{CROSS MARK}":
+                        await self.player_declares_bankruptcy(player)
+
+                elif reaction.message == player.reaction_message:
+                    if reaction.emoji in player.reaction_message_actions:
+                        player.reaction_message_actions[reaction.emoji][0]
+
     async def reaction_remove(self, user, reaction):
         pass
 
@@ -224,6 +243,44 @@ class MonopolyGame(Game):
         else:
             self.auction_message = await self.channel.send(embed=embed)
 
+    async def collect_from_everyone(self, player, amount):
+        self.collecting_player = player
+        self.collecting_amount = amount
+        self.collecting_total = 0
+        self.left_to_collect = filter(lambda p: p != player, self.monopoly_players)
+        await self.update_collection()
+
+    async def update_collection(self):
+        embed = discord.Embed(title="Collect from Everyone", colour=self.collecting_player.colour)
+        embed.set_author(name=self.collecting_player.user.name, icon_url=self.collecting_player.user.avatar_url)
+        embed.add_field(name="Amount", value=f"M{self.collecting_amount}", inline=False)
+        embed.add_field(name="Left", value="\n".join(map(lambda p: p.user.name, self.left_to_collect)))
+        embed.add_field(name="React", value="\N{BANKNOTE WITH DOLLAR SIGN}\n\N{CROSS MARK}")
+        embed.add_field(name="Action", value="Pay\nDeclare bankruptcy")
+        if not self.collecting_message:
+            self.collecting_message = await self.channel.send(embed=embed)
+            await self.collecting_message.add_reaction("\N{BANKNOTE WITH DOLLAR SIGN}")
+            await self.collecting_message.add_reaction("\N{CROSS MARK}")
+            self.reaction_messages.append(self.collecting_message)
+        else:
+            await self.collecting_message.edit(embed=embed)
+            if not self.left_to_collect:
+                self.reaction_messages.remove(self.collecting_message)
+                self.collecting_message = None
+                await self.collecting_player.deposit(self.collecting_total)
+                await self.collecting_player.confirm_end_turn()
+
+    async def paid_collection(self, player):
+        if player.withdraw(self.collecting_amount):
+            self.collecting_total += self.collecting_amount
+            self.left_to_collect.remove(player)
+            await self.update_collection()
+
+    async def player_declares_bankruptcy(self, player):
+        if player.declare_bankruptcy():
+            self.left_to_collect.remove(player)
+            await self.update_collection()
+
 class MonopolyPlayer:
 
     def __init__(self, user, game):
@@ -245,8 +302,12 @@ class MonopolyPlayer:
         self.rolled_this_turn = False
         self.end_turn_message = None
         self.passed_go = False
-        self.has_goojfc = False
+        self.goojfc = 0
         self.jail_message = None
+        self.drawing = None
+        self.drawing_message = None
+        self.reaction_message = None
+        self.reaction_message_actions = None
 
     def set_colour(self, colour):
         self.colour = colour
@@ -317,19 +378,26 @@ class MonopolyPlayer:
                 self.game.reaction_messages.append(self.rent_message)
 
         elif self.square == 10:
-            embed = discord.Embed(title="JAIL", description="JUST VISITING", colour=discord.Colour.dark_gray())
+            embed = discord.Embed(title="Jail", description="Just Visiting", colour=discord.Colour.dark_gray())
             await self.game.channel.send(embed=embed)
             await self.confirm_end_turn()
 
         elif self.square == 20:
-            embed = discord.Embed(title="FREE PARKING", colour=discord.Colour.from_rgb(255, 255, 255))
+            embed = discord.Embed(title="Free Parking", colour=discord.Colour.from_rgb(255, 255, 255))
             await self.game.channel.send(embed=embed)
             await self.confirm_end_turn()
 
         elif self.square == 30:
-            embed = discord.Embed(title="GO TO JAIL", colour=discord.Colour.dark_blue())
+            embed = discord.Embed(title="Go To Jail", colour=discord.Colour.dark_blue())
             await self.game.channel.send(embed=embed)
             await self.go_to_jail()
+
+        elif self.square in (2, 17, 33):
+            embed = discord.Embed(title="Community Chest", description="Draw a card", colour=self.colour)
+            embed.set_author(name=self.user.name, icon_url=self.user.avatar_url)
+            self.drawing_message = await self.game.channel.send(embed=embed)
+            await self.drawing_message.add_reaction("\N{BLACK QUESTION MARK ORNAMENT}")
+            self.game.reaction_messages.append(self.drawing_message)
 
         else:
             await self.confirm_end_turn()
@@ -371,6 +439,124 @@ class MonopolyPlayer:
         await self.game.channel.send(embed=embed)
         await self.deposit(200)
         self.passed_go = False
+
+    async def create_reaction_message(self, embed, **kwargs):
+        embed.add_field(name="React", value="\n".join(kwargs.keys()))
+        embed.add_field(name="Action", value="\n".join(map(lambda r: r[1], kwargs.values())))
+        message = await self.game.channel.send(embed=embed)
+        for reaction in kwargs:
+            await message.add_reaction(reaction)
+        self.reaction_message = message
+        self.game.reaction_messages.append(self.reaction_message)
+        self.reaction_message_actions = kwargs
+
+    async def draw_community_chest(self):
+        embed = discord.Embed(title="Community Chest Card", colour=discord.Colour.blue())
+        card = random.randint(1, 17)
+        if card == 1:
+            embed.description = "Life Insurance Matures\nCollect M100"
+            await self.create_reaction_message(embed, {
+                "\N{WHITE HEAVY CHECK MARK}": await self.deposit(100)
+            })
+        elif card == 2:
+            self.set_square(0)
+            self.passed_go = True
+            embed.description = "Advance to GO"
+            message = await self.game.channel.send(embed=embed)
+            await message.add_reaction("\N{WHITE HEAVY CHECK MARK}")
+            self.reaction_message = message
+            self.game.reaction_messages.append(self.reaction_message)
+            self.reaction_message_actions = {
+                "\N{WHITE HEAVY CHECK MARK}": (await self.evaluate_square(), "Advance"),
+            }
+        elif card == 3:
+            embed.description = "Pay hospital M100"
+            await self.create_reaction_message(embed, {
+                "\N{BANKNOTE WITH DOLLAR SIGN}": (await self.withdraw(100), "Pay"),
+                "\N{CROSS MARK}": await (self.declare_bankruptcy(), "Decale bankruptcy")
+            })
+        elif card == 4:
+            embed.description = "Xmas Fund Matures\nCollect M100"
+            await self.create_reaction_message(embed, {
+                "\N{WHITE HEAVY CHECK MARK}": (await self.deposit(100), "Collect")
+            })
+        elif card == 5:
+            embed.description = "Pay school tax of M150"
+            await self.create_reaction_message(embed, {
+                "\N{BANKNOTE WITH DOLLAR SIGN}": (await self.withdraw(150), "Pay"),
+                "\N{CROSS MARK}": (await self.declare_bankruptcy(), "Declare bankruptcy")
+            })
+        elif card == 6:
+            embed.description = "Income Tax Refund\nCollect M20"
+            await self.create_reaction_message(embed, {
+                "\N{MONEY WITH WINGS}": (await self.deposit(20), "Collect")
+            })
+        elif card == 7:
+            embed.description = "You inherit M100"
+            await self.create_reaction_message(embed, {
+                "\N{MONEY WITH WINGS}": (await self.deposit(100), "Collect")
+            })
+        elif card == 8:
+            embed.description = "Doctor's Fee\nPay M50"
+            await self.create_reaction_message(embed, {
+                "\N{BANKNOTE WITH DOLLAR}": (await self.withdraw(50), "Pay")
+            })
+        elif card == 9:
+            self.goojfc += 1
+            embed.description = "Get Out of Jail Free\n\nThis card my be kept until needed, or sold"
+            await self.create_reaction_message(embed, {
+                "\N{WHITE HEAVY CHECK MARK}": (await self.confirm_end_turn(), "Take")
+            })
+        elif card == 10:
+            embed.description = "From sale of stock you get M45"
+            await self.create_reaction_message(embed, {
+                "\N{MONEY WITH WINGS}": (await self.deposit(45), "Get")
+            })
+        elif card == 11:
+            embed.description = "Receive for services M25"
+            await self.create_reaction_message(embed, {
+                "\N{MONEY WITH WINGS}": (await self.deposit(25), "Receive")
+            })
+        elif card == 12:
+            embed.description = "Grand Opera Opening\nCollect M50 from every player"
+            await self.game.collect_from_everyone(self, 50)
+        elif card == 13:
+            embed.description = "Bank error in your favour\nCollect M200"
+            await self.create_reaction_message(embed, {
+                "\N{MONEY WITH WINGS}": (await self.deposit(200), "Collect")
+            })
+        elif card == 14:
+            embed.description = "You have won second prize in a beauty contest\nCollect M10"
+            await self.create_reaction_message(embed, {
+                "\N{MONEY WITH WINGS}": (await self.deposit(10), "Collect")
+            })
+        elif card == 15:
+            embed.description = "GO TO JAIL\nGo directly to jail\nDo not pass GO\nDo not collect M200"
+            await self.create_reaction_message(embed, {
+                "\N{WHITE HEAVY CHECK MARK}": (await self.go_to_jail(), "Go")
+            })
+        elif card == 16:
+            embed.description = "You are assessed for street repairs\nM40 per house\nM115 per hotel"
+            total = 40 * self.num_houses() + 115 * self.num_hotels()
+            embed.add_field(name="Total", value=str(total), inline=False)
+            await self.create_reaction_message(embed, {
+                "\N{BANKNOTE WITH DOLLAR SIGN}": (await self.withdraw(total), "Pay"),
+                "\N{CROSS MARK}": (await self.declare_bankruptcy(), "Declare bankruptcy")
+            })
+
+    def num_houses(self):
+        result = 0
+        for prop in self.game.properties:
+            p = self.game.properties[prop]
+            if p.owner == self:
+                result += p.houses
+
+    def num_hotels(self):
+        result = 0
+        for prop in self.game.properties:
+            p = self.game.properties[prop]
+            if p.owner == self:
+                result += p.hotel
 
     async def go_to_jail(self):
         self.set_square("jail")
@@ -425,8 +611,8 @@ class MonopolyPlayer:
                     self.game.new_turn()
                 self.turns_in_jail = 0
         elif choice == "card" and not self.turns_in_jail == 3:
-            if self.has_goojfc:
-                self.has_goojfc = False
+            if self.goojfc:
+                self.has_goojfc -= 1
                 self.set_square(10)
                 self.turns_in_jail = 0
                 self.game.new_turn()
