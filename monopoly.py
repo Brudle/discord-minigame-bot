@@ -1,4 +1,5 @@
 import asyncio
+from asyncio.coroutines import iscoroutine
 import discord
 from discord.ext.commands import command, Cog, Greedy
 import random
@@ -110,6 +111,10 @@ class MonopolyGame(Game):
                     elif reaction.emoji == "\N{CROSS MARK}":
                         await player.confirmed_improvement(False)
 
+                elif reaction.message == player.end_turn_message:
+                    if reaction.emoji == "\N{WHITE HEAVY CHECK MARK}":
+                        await player.end_turn()
+
     async def reaction_remove(self, user, reaction):
         pass
 
@@ -183,7 +188,7 @@ class MonopolyGame(Game):
             embed = discord.Embed(title=f"{self.auction_property.name} Unsold", description="Auction received no bids")
             await self.channel.send(embed=embed)
             self.auction_message = None
-            await self.new_turn()
+            await self.current_turn.confirm_end_turn()
         elif len(self.auction_participants) == 0 or (len(self.auction_participants) == 1 and self.auction_participants[0] == self.auction_winner):
             self.auction_underway = False
             embed = discord.Embed(title="Won the Auction", colour=self.auction_winner.colour)
@@ -227,6 +232,7 @@ class MonopolyPlayer:
         self.rent_message = None
         self.confirm_improvement_message = None
         self.rolled_this_turn = False
+        self.end_turn_message = None
 
     def set_colour(self, colour):
         self.colour = colour
@@ -243,6 +249,23 @@ class MonopolyPlayer:
             await self.passed_go()
         self.square %= 40
         await self.evaluate_square()
+
+    async def confirm_end_turn(self):
+        embed = discord.Embed(title="", description="Check to end your turn", colour=self.colour)
+        embed.add_field(name="Available Commands", value="""```
+        !bm buy       <improvement> <group> <property>
+        !bm view      <property>
+        !bm portfolio (user)
+        !bm trade     <user>```""")
+        embed.set_author(name=self.user.name, icon_url=self.user.avatar_url)
+        self.end_turn_message = await self.game.channel.send(embed=embed)
+        await self.end_turn_message.add_reaction("\N{HEAVY WHITE CHECK MARK}")
+        self.game.reaction_messages.append(self.end_turn_message)
+
+    async def end_turn(self):
+        self.game.reaction_message.remove(self.end_turn_message)
+        self.end_turn_message = None
+        await self.game.new_turn()
 
     async def evaluate_square(self):
         embed = discord.Embed(title="", colour=self.colour)
@@ -265,7 +288,7 @@ class MonopolyPlayer:
                 self.game.reaction_messages.append(message)
                 self.game.unowned_property_react = message
             elif prop.owner == self:
-                await self.game.new_turn()
+                await self.confirm_end_turn()
             else:
                 self.rent = prop.get_rent(self.roll)
                 embed = discord.Embed(title="Rent Due", description=f"M{self.rent}", colour=self.colour)
@@ -277,7 +300,7 @@ class MonopolyPlayer:
                 await self.rent_message.add_reaction("\N{CROSS MARK}")
                 self.game.reaction_messages.append(self.rent_message)
         else:
-            await self.game.new_turn()
+            await self.confirm_end_turn()
 
     async def pay_rent(self):
         if await self.withdraw(self.rent):
@@ -285,7 +308,7 @@ class MonopolyPlayer:
             self.rent = 0
             self.game.reaction_messages.remove(self.rent_message)
             self.rent_message = None
-            await self.game.new_turn()
+            await self.confirm_end_turn()
 
     async def purchase_property(self, prop, price=None):
         if await self.withdraw(price or prop.price):
@@ -294,9 +317,9 @@ class MonopolyPlayer:
             await self.game.channel.send(embed=embed)
             self.aquire(prop)
             self.game.unowned_property_react = None
-            await self.game.new_turn()
+            await self.confirm_end_turn()
         elif price:
-            await self.game.new_turn()
+            await self.confirm_end_turn()
 
     def aquire(self, prop):
         self.portfolio.append(prop)
