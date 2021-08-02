@@ -246,6 +246,7 @@ class MonopolyPlayer:
         self.end_turn_message = None
         self.passed_go = False
         self.has_goojfc = False
+        self.jail_message = None
 
     def set_colour(self, colour):
         self.colour = colour
@@ -266,17 +267,17 @@ class MonopolyPlayer:
     async def confirm_end_turn(self):
         embed = discord.Embed(title="", description="Check to end your turn", colour=self.colour)
         embed.add_field(name="Available Commands", value="""```
-        !bm buy       <improvement> <group> <property>
-        !bm view      <property>
-        !bm portfolio (user)
-        !bm trade     <user>```""")
+!bm buy       <improvement> <group> <property>
+!bm view      <property>
+!bm portfolio (user)
+!bm trade     <user>```""")
         embed.set_author(name=self.user.name, icon_url=self.user.avatar_url)
         self.end_turn_message = await self.game.channel.send(embed=embed)
-        await self.end_turn_message.add_reaction("\N{HEAVY WHITE CHECK MARK}")
+        await self.end_turn_message.add_reaction("\N{WHITE HEAVY CHECK MARK}")
         self.game.reaction_messages.append(self.end_turn_message)
 
     async def end_turn(self):
-        self.game.reaction_message.remove(self.end_turn_message)
+        self.game.reaction_messages.remove(self.end_turn_message)
         self.end_turn_message = None
         await self.game.new_turn()
 
@@ -350,7 +351,7 @@ class MonopolyPlayer:
             self.game.unowned_property_react = None
             await self.confirm_end_turn()
         elif price:
-            await self.confirm_end_turn()
+            await self.game.current_turn.confirm_end_turn()
 
     def aquire(self, prop):
         self.portfolio.append(prop)
@@ -667,7 +668,10 @@ class MonopolyBoard:
         self.game = game
 
     def pos(self, square, d):
-        if square == 0:
+        if square == "jail":
+            y = 695
+            x = 31
+        elif square == 0:
             y = 695
             x = 695
         elif square > 0 and square < 5:
@@ -706,9 +710,6 @@ class MonopolyBoard:
         elif square >= 38 and square < 40:
             y = 564+65*(square-38)
             x = 694
-        elif square == "jail":
-            y = 695
-            x = 31
         return x, y
 
     def update(self):
