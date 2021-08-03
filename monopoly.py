@@ -23,6 +23,7 @@ class MonopolyGame(Game):
         self.unowned_property_react = None
         self.auction_message = None
         self.collecting_message = None
+        self.multiple_auctions = False
 
         self.properties = {}
 
@@ -179,6 +180,12 @@ class MonopolyGame(Game):
     def property_group(self, group):
         return filter(lambda p: p.group == group, self.properties.values())
 
+    async def auction_properties(self, props):
+        self.multiple_auctions = True
+        self.auction_properties_list = props
+        self.auction_number = 0
+        await self.auction(props[0])
+
     async def auction(self, prop):
         self.auction_underway = True
         self.auction_participants = self.monopoly_players.copy()
@@ -226,6 +233,14 @@ class MonopolyGame(Game):
             await self.channel.send(embed=embed)
             self.auction_message = None
             await self.auction_winner.purchase_property(self.auction_property, self.auction_bid)
+        if not self.auction_underway and self.multiple_auctions:
+            self.auction_number += 1
+            if self.auction_number >= len(self.auction_properties_list):
+                self.multiple_auctions = False
+                if self.current_turn not in self.monopoly_players:
+                    self.current_turn.end_turn()
+            else:
+                self.auction(self.auction_properties_list[self.auction_number])
 
     async def update_auction(self):
         embed = discord.Embed(title="Auction", description="```!bm bid <amount>```")
@@ -280,6 +295,12 @@ class MonopolyGame(Game):
         if player.declare_bankruptcy():
             self.left_to_collect.remove(player)
             await self.update_collection()
+
+    async def confirm_bankrupt(self, player):
+        self.monopoly_players.remove(player)
+        if len(self.monopoly_players) == 1:
+            embed = discord.Embed(title="Won the game!", colour=self.monopoly_players[0].colour)
+            embed.set_author(name=self.monopoly_players[0].user.name, icon_url=self.monopoly_players[0].user.avatar_url)
 
 class MonopolyPlayer:
 
@@ -423,7 +444,7 @@ class MonopolyPlayer:
             self.game.unowned_property_react = None
             if not price:
                 await self.confirm_end_turn()
-        if price:
+        if price and not self.game.multiple_auctions:
             await self.game.current_turn.confirm_end_turn()
 
     def aquire(self, prop):
@@ -664,7 +685,50 @@ class MonopolyPlayer:
         return False
 
     async def declare_bankruptcy(self):
-        pass
+        if self.balance >= self.owe_amount:
+            embed = discord.Embed(title="Not Bankrupt", description="You have enough money to pay", colour=self.colour)
+            embed.set_author(name=self.user.name, icon_url=self.user.avatar_url)
+            await self.game.channel.send(embed=embed)
+            return False
+        else:
+            for prop in self.game.property:
+                p = self.game.property[prop]
+                if not p.mortgaged:
+                    embed = discord.Embed(title="Not Bankrupt", description="You still have unmortgaged property", colour=self.colour)
+                    embed.set_author(name=self.user.name, icon_url=self.user.avatar_url)
+                    await self.game.channel.send(embed=embed)
+                    return False
+                    break
+            else:
+                cash = self.balance
+                props = list(filter(lambda p: p.owner == self, self.game.properties.values()))
+                await self.withdraw(cash)
+                embed = discord.Embed(title="Is Bankrupt", colour=self.colour)
+                embed.set_author(name=self.user.name, icon_url=self.user.avatar_url)
+                await self.game.channel.send(embed=embed)
+                self.game.confirm_bankrupt(self)
+                if self.owes:
+                    await self.owes.deposit(cash)
+                    await self.owes.receive_property(props)
+                else:
+                    await self.game.auction_properties(props)
+                return True
+
+    async def receive_property(self, props):
+        interest = 0
+        for prop in props:
+            prop.set_owner(self)
+            embed = discord.Embed(title="Received a Property", description=prop.name, colour=self.colour)
+            embed.set_author(name=self.user.name, icon_url=self.user.avatar_url)
+            if prop.mortgaged:
+                interest += prop.price//20
+        if interest:
+            embed = discord.Embed(title="You Must Pay Interest on the Mortgaged Properties You Received")
+            embed.add_field(name="Total", value=f"M{interest}", inline=False)
+            await self.create_reaction_message(embed, **{
+                "\N{BANKNOTE WITH DOLLAR SIGN}": (self.withdraw(interest), "Pay"),
+                "\N{CROSS MARK}": (self.declare_bankruptcy(), "Declare bankruptcy")
+            })
 
     async def buy(self, improvement, group, property):
         houseable_props = {}
@@ -698,22 +762,22 @@ class MonopolyPlayer:
         elif not group:
             embed = discord.Embed(title="Attempted Purchase", description="Specify a group and/or property\n\
                 ```!bm buy <improvement> <group/all> <property/all>```")
-            show_house = True
+            {"house": show_house, "hotel": show_hotel}[improvement] = True
         elif group == "all":
             props = []
             if improvement == "house":
-                map(props.extend, houseable_props.values())
+                list(map(props.extend, houseable_props.values()))
                 if props:
                     await self.confirm_improvement(0, "house", props)
                 else:
                     embed = discord.Embed(title="Attempted Purchase", description="No valid properties")
             else:
-                map(props.extend, hotelable_props.values())
+                list(map(props.extend, hotelable_props.values()))
                 if props:
                     await self.confirm_improvement(0, "hotel", props)
                 else:
                     embed = discord.Embed(title="Attempted Purchase", description="No valid properties")
-        elif int(group) not in range(len({"house": houseable_props, "hotel": hotelable_props}[improvement])):
+        elif (int(group) - 1) not in range(len({"house": houseable_props, "hotel": hotelable_props}[improvement])):
             embed = discord.Embed(title="Attempted Purchase", description="Invalid group")
             {"house": show_house, "hotel": show_hotel}[improvement] = True
         elif not property:
@@ -741,7 +805,7 @@ class MonopolyPlayer:
                 for i, g in enumerate(hotelable_props):
                     if i + 1 == int(group):
                         group = g
-            if int(property) not in range(len({"house": houseable_props, "hotel": hotelable_props}[improvement][group])):
+            if (int(property) - 1) not in range(len({"house": houseable_props, "hotel": hotelable_props}[improvement][group])):
                 embed = discord.Embed(title="Attempted Purchase", description="Invalid property\n\
                     ```!bm buy <improvement> <group/all> <property/all>```")
                 {"house": show_house, "hotel": show_hotel}[improvement] = True
@@ -765,7 +829,7 @@ class MonopolyPlayer:
                     for i, g in enumerate(houseable_props):
                         group_str = ""
                         for j, prop in enumerate(houseable_props[g]):
-                            group_str += f"{j+1:<3} - {prop.name}"
+                            group_str += f"{j+1:<3} - {prop.name}\n"
                         embed.add_field(name=f"{i+1}. {g}", value=group_str)
         if show_hotel:
             if show_group:
@@ -781,129 +845,14 @@ class MonopolyPlayer:
                     for i, g in enumerate(hotelable_props):
                         group_str = ""
                         for j, prop in enumerate(hotelable_props[g]):
-                            group_str += f"{j+1:<3} - {prop.name}"
+                            group_str += f"{j+1:<3} - {prop.name}\n"
                         embed.add_field(name=f"{i+1}. {g}", value=group_str)
         embed.colour = self.colour
         embed.set_author(name=self.user.name, icon_url=self.user.avatar_url)
         await self.game.channel.send(embed=embed)
 
     async def sell(self, improvement, group, property):
-        houseable_props = {}
-        hotelable_props = {}
-        for g in MonopolyProperty.groups:
-            if self.owns_group(g):
-                houseable_props[g] = []
-                hotelable_props[g] = []
-                for prop in self.game.property_group(g):
-                    if prop.can_sell_house():
-                        houseable_props[g].append(prop)
-                    if prop.can_sell_hotel():
-                        hotelable_props[g].append(prop)
-            if not houseable_props[g]:
-                del houseable_props[g]
-            if not hotelable_props[g]:
-                del houseable_props[g]
-        show_house = False
-        show_hotel = False
-        show_group = False
-        if not improvement:
-            embed = discord.Embed(title="Attempted Sale", description="Specify an improvement, group and/or property\n\
-                ```!bm buy <house/hotel> <group/all> <property/all>```")
-            show_house = True
-            show_hotel = True
-        elif improvement not in ("house", "hotel"):
-            embed = discord.Embed(title="Attempted Purchase", description="That is not a valid improvement\n\
-                ```!bm buy <house/hotel> <group/all> <property/all>```")
-            show_house = True
-            show_hotel = True
-        elif not group:
-            embed = discord.Embed(title="Attempted Purchase", description="Specify a group and/or property\n\
-                ```!bm buy <improvement> <group/all> <property/all>```")
-            show_house = True
-        elif group == "all":
-            props = []
-            if improvement == "house":
-                map(props.extend, houseable_props.values())
-                await self.confirm_improvement(0, "house", props)
-            else:
-                map(props.extend, hotelable_props.values())
-                await self.confirm_improvement(0, "hotel", props)
-        elif group not in range(len({"house": houseable_props, "hotel": hotelable_props}[improvement])):
-            embed = discord.Embed(title="Attempted Purchase", description="Invalid property")
-            {"house": show_house, "hotel": show_hotel}[improvement] = True
-        elif not property:
-            embed = discord.Embed(title="Attempted Purchase", description="Specify a property\n\
-                ```!bm buy <improvement> <group/all> <property/all>```")
-            {"house": show_house, "hotel": show_hotel}[improvement] = True
-            show_group = True
-        elif property == "all":
-            if improvement == "house":
-                for i, g in enumerate(houseable_props):
-                    if i == int(group):
-                        group = g
-                await self.confirm_improvement(0, "house", houseable_props[group])
-            else:
-                for i, g in enumerate(houseable_props):
-                    if i == int(group):
-                        group = g
-                await self.confirm_improvement(0, "hotel", hotelable_props[group])
-        elif int(property) not in range(len({"house": houseable_props, "hotel": hotelable_props}[improvement][group])):
-            embed = discord.Embed(title="Attempted Purchase", description="Invalid property\n\
-                ```!bm buy <improvement> <group/all> <property/all>```")
-            {"house": show_house, "hotel": show_hotel}[improvement] = True
-            show_group = True
-        else:
-            if improvement == "house":
-                for i, g in enumerate(houseable_props):
-                    if i == int(group):
-                        group = g
-                await self.confirm_improvement(0, "house", [houseable_props[group][int(property)]])
-            else:
-                for i, g in enumerate(hotelable_props):
-                    if i == int(group):
-                        group = g
-                await self.confirm_improvement(0, "hotel", [hotelable_props[group][int(property)]])
-        if show_house:
-            if show_group:
-                for i, g in enumerate(houseable_props):
-                    if i == int(group):
-                        group = g
-                group_str = ""
-                for i, prop in enumerate(houseable_props[group]):
-                    group_str += f"{i+1:<3} - {prop.name}"
-                embed.add_field(name=group, value = group_str)
-            else:
-                if not houseable_props:
-                    embed.add_field(name="Groups and Properties with Purchaseable Houses", value="None", inline=False)
-                else:
-                    embed.add_field(name="Groups and Properties with Purchaseable Houses", value="-", inline=False)
-                    for i, g in enumerate(houseable_props):
-                        group_str = "-"
-                        for j, prop in enumerate(houseable_props[g]):
-                            group_str += f"{j+1:<3} - {prop.name}"
-                        embed.add_field(name=f"{i}. {g}", value=group_str)
-        if show_hotel:
-            if show_group:
-                for i, g in enumerate(hotelable_props):
-                    if i == int(group):
-                        group = g
-                group_str = ""
-                for i, prop in enumerate(hotelable_props[group]):
-                    group_str += f"{i+1:<3} - {prop.name}"
-                embed.add_field(name=group, value = group_str)
-            else:
-                if not hotelable_props:
-                    embed.add_field(name="Groups and Properties with Purchaseable Hotels", value="None", inline=False)
-                else:
-                    embed.add_field(name="Groups and Properties with Purchaseable Hotels", value="-", inline=False)
-                    for i, g in enumerate(hotelable_props):
-                        group_str = "-"
-                        for j, prop in enumerate(hotelable_props[g]):
-                            group_str += f"{j+1:<3} - {prop.name}"
-                        embed.add_field(name=f"{i}. {g}", value=group_str)
-        embed.colour = self.colour
-        embed.set_author(name=self.user.name, icon_url=self.user.avatar_url)
-        await self.game.channel.send(embed=embed)
+        pass
     
     async def confirm_improvement(self, buy_or_sell, improvement, property):
         title = ("Confirm Purchase", "Confirm Sale")[buy_or_sell]
@@ -951,6 +900,49 @@ class MonopolyPlayer:
         self.game.reaction_messages.remove(self.confirm_improvement_message)
         self.confirm_improvement_message = None
         embed.colour = self.colour
+        embed.set_author(name=self.user.name, icon_url=self.user.avatar_url)
+        await self.game.channel.send(embed=embed)
+
+    async def mortgage(self, property):
+        mortgageable = []
+        for prop in self.game.properties:
+            p = self.game.properties[p]
+            if p.owner == self and p.houses == 0 and not p.hotel and not p.mortgaged:
+                mortgageable.append(p)
+        if not property:
+            embed = discord.Embed(title="Mortgage", description = "```!bm mortgage <property>```")
+        elif (property - 1) not in range(len(mortgageable)):
+            embed = discord.Embed(title="Attempted Mortgage", description="Invalid property\n\
+                ```!bm mortgage <property>```")
+        else:
+            embed = discord.Embed(title="Confirm Mortgage")
+            embed.add_field(title="Property", value=mortgageable[property-1].name, inline=False)
+            embed.add_field(title="Value", value=f"M{mortgageable[property-1].price//2}", inline=False)
+            await self.create_reaction_message(embed, **{
+                "\N{MONEY WITH WINGS}": (self.confirm_mortgage[mortgageable[property-1]], "Mortgage property"),
+                "\N{CROSS MARK}": (self.cancel_mortgage(), "Cancel")
+            })
+            return True
+        prop_list = "None"
+        if mortgageable:
+            prop_list = ""
+            value_list = ""
+            for i, p in enumerate(mortgageable):
+                prop_list += f"{i:<3} - {p.name}"
+                value_list += f"M{p.price//2:>3}"
+        embed.add_field(title="Mortgageable Properties", value=prop_list)
+        if mortgageable:
+            embed.add_field(title="Value", value=value_list)
+        embed.colour = self.colour
+        embed.set_author(name=self.user.name, icon_url=self.user.avatar_url)
+        await self.game.channel.send(embed=embed)
+    
+    async def confirm_mortgage(self, property):
+        if property.owner == self:
+            await property.mortgage()
+        
+    async def cancel_mortgage(self):
+        embed = discord.Embed(title="Mortgage Cancelled", colour=self.colour)
         embed.set_author(name=self.user.name, icon_url=self.user.avatar_url)
         await self.game.channel.send(embed=embed)
 
@@ -1264,43 +1256,65 @@ class MonopolyProperty:
                 else:
                     return self.rent[self.houses]
 
-    async def display(self):
-        embed = discord.Embed(title=f"TITLE DEED\n{self.name.upper()}")
-        if self.group == "station":
-            embed.colour = discord.Colour.default()
-            embed.description = ("""
-Rent: M25
-If 2 stations are owned: M50
-If 3 stations are owned: M100
-If 4 stations are owned: M200\n
-mortgage value: M100""")
+    async def mortgage(self):
+        self.mortgage = True
+        await self.display()
+        await self.owner.deposit(self.price//2)
 
-        elif self.group == "utility":
-            embed.colour = discord.Colour.from_rgb(255, 255, 255)
-            embed.description = ("""
-If one "Utility" is owned, rent
-is 4 times amount shown
-on dice.\n
-If both "Utilities" are owned,
-rent is 10 times amount
-shown on dice.\n
-mortgage value: M75""")
+    async def display(self):
+        if self.mortgaged:
+            embed = discord.Embed(title="MORTGAGED", colour=discord.Colour.red())
+            embed.description = (f"""```
+            
+            
+            {'':-^30}
+            {self.name.upper():^30}
+            {f"MORTGAGED FOR M{self.price//2}":^30}
+            {'':-^30}
+            
+            {"Card must be turned":^30}
+            {"this side up if":^30}
+            {"property is mortgaged.":^30}
+            
+            
+            ```""")
         else:
-            embed.colour = discord.Colour.from_rgb(*ImageColor.getrgb(self.group.replace(" ", "")))
-            embed.description = f"""```
-{f"RENT M{self.rent[0]}":^34}
-{f"With 1 House{'M':>16}{self.rent[1]:>4}":^34} 
-{f"With 2 Houses{self.rent[2]:>19}":^34}
-{f"With 3 Houses{self.rent[3]:>19}":^34}
-{f"With 4 Houses{self.rent[4]:>19}":^34}
-{f"With HOTEL M{self.rent[5]}":^34}\n
-{f"Mortgage Value M{self.price}":^34}
-{f"Houses cost M{self.house_price} each":^34}
-{f"Hotels, M{self.house_price} plus 4 houses":^34}\n
-{f"{'If a player owns ALL the Lots':<30}":^34}
-{f"{'of any Colour-Group, the rent':<30}":^34}
-{f"{'is Doubled on Unimproved Lots':<30}":^34}
-{f"{'in that group.':<30}":^34}```"""
+            embed = discord.Embed(title=f"TITLE DEED\n{self.name.upper()}")
+            if self.group == "station":
+                embed.colour = discord.Colour.default()
+                embed.description = ("""
+    Rent: M25
+    If 2 stations are owned: M50
+    If 3 stations are owned: M100
+    If 4 stations are owned: M200\n
+    mortgage value: M100""")
+
+            elif self.group == "utility":
+                embed.colour = discord.Colour.from_rgb(255, 255, 255)
+                embed.description = ("""
+    If one "Utility" is owned, rent
+    is 4 times amount shown
+    on dice.\n
+    If both "Utilities" are owned,
+    rent is 10 times amount
+    shown on dice.\n
+    mortgage value: M75""")
+            else:
+                embed.colour = discord.Colour.from_rgb(*ImageColor.getrgb(self.group.replace(" ", "")))
+                embed.description = f"""```
+    {f"RENT M{self.rent[0]}":^34}
+    {f"With 1 House{'M':>16}{self.rent[1]:>4}":^34} 
+    {f"With 2 Houses{self.rent[2]:>19}":^34}
+    {f"With 3 Houses{self.rent[3]:>19}":^34}
+    {f"With 4 Houses{self.rent[4]:>19}":^34}
+    {f"With HOTEL M{self.rent[5]}":^34}\n
+    {f"Mortgage Value M{self.price}":^34}
+    {f"Houses cost M{self.house_price} each":^34}
+    {f"Hotels, M{self.house_price} plus 4 houses":^34}\n
+    {f"{'If a player owns ALL the Lots':<30}":^34}
+    {f"{'of any Colour-Group, the rent':<30}":^34}
+    {f"{'is Doubled on Unimproved Lots':<30}":^34}
+    {f"{'in that group.':<30}":^34}```"""
         if self.owner:
             embed.set_author(name=self.owner.user.name, icon_url=self.owner.user.avatar_url)
         else:
