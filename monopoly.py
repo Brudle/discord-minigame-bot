@@ -24,6 +24,8 @@ class MonopolyGame(Game):
         self.auction_message = None
         self.collecting_message = None
         self.multiple_auctions = False
+        self.chest_has_jail_card = True
+        self.chance_has_jail_card = True
 
         self.properties = {}
 
@@ -323,12 +325,14 @@ class MonopolyPlayer:
         self.rolled_this_turn = False
         self.end_turn_message = None
         self.passed_go = False
-        self.goojfc = 0
+        self.chest_jail_card = False
+        self.chance_jail_card = False
         self.jail_message = None
         self.drawing = None
         self.drawing_message = None
         self.reaction_message = None
         self.reaction_message_actions = None
+        self.double_rent = False
 
     def set_colour(self, colour):
         self.colour = colour
@@ -392,7 +396,7 @@ class MonopolyPlayer:
             elif prop.owner == self:
                 await self.confirm_end_turn()
             else:
-                self.rent = prop.get_rent(self.roll)
+                self.rent = prop.get_rent(self.roll, self.double_rent)
                 embed = discord.Embed(title="Rent Due", description=f"M{self.rent}", colour=self.colour)
                 embed.add_field(name="React", value="\N{BANKNOTE WITH DOLLAR SIGN}\n\N{CROSS MARK}")
                 embed.add_field(name="Action", value="Pay the rent\nDeclare bankruptcy")
@@ -417,6 +421,13 @@ class MonopolyPlayer:
             await self.game.channel.send(embed=embed)
             await self.go_to_jail()
 
+        elif self.square == 4:
+            embed = discord.Embed(title="Income Tax", description="Pay M200")
+            await self.create_reaction_message(embed, **{
+                "\N{BANKNOTE WITH DOLLAR SIGN}": (self.withdraw(200), "Pay"),
+                "\N{CROSS MARK}": (self.declare_bankruptcy(), "Declare bankruptcy")
+            })
+
         elif self.square in (2, 17, 33):
             embed = discord.Embed(title="Community Chest", description="Draw a card", colour=self.colour)
             embed.set_author(name=self.user.name, icon_url=self.user.avatar_url)
@@ -424,8 +435,16 @@ class MonopolyPlayer:
                 "\N{BLACK QUESTION MARK ORNAMENT}": (self.draw_community_chest(), "Draw a card")
             })
 
+        elif self.square in (7, 22, 36):
+            embed = discord.Embed(title="Chance")
+            await self.create_reaction_message(embed, **{
+                "\N{BLACK QUESTION MARK ORNAMENT}": (self.draw_chance(), "Draw a card")
+            })
+
         else:
             await self.confirm_end_turn()
+
+        self.double_rent = False
 
     async def pay_rent(self):
         if await self.withdraw(self.rent):
@@ -479,7 +498,7 @@ class MonopolyPlayer:
     async def draw_community_chest(self):
         self.reaction_message = None
         embed = discord.Embed(title="Community Chest Card", colour=discord.Colour.blue())
-        card = random.randint(1, 17)
+        card = random.randint(1, 18)
         if card == 1:
             embed.description = "Life Insurance Matures\nCollect M100"
             await self.create_reaction_message(embed, **{
@@ -488,25 +507,25 @@ class MonopolyPlayer:
         elif card == 2:
             self.set_square(0)
             self.passed_go = True
-            embed.description = "Advance to GO"
+            embed.description = "Advance to GO\nCollect M200"
             await self.create_reaction_message(embed, **{
                 "\N{WHITE HEAVY CHECK MARK}": (self.evaluate_square(), "Advance")
             })
         elif card == 3:
-            embed.description = "Pay hospital M100"
+            embed.description = "Pay hospital fees of M100"
             await self.create_reaction_message(embed, **{
                 "\N{BANKNOTE WITH DOLLAR SIGN}": (self.withdraw(100), "Pay"),
                 "\N{CROSS MARK}": (self.declare_bankruptcy(), "Declare bankruptcy")
             })
         elif card == 4:
-            embed.description = "Xmas Fund Matures\nCollect M100"
+            embed.description = "Holiday Fund Matures\nReceive M100"
             await self.create_reaction_message(embed, **{
-                "\N{WHITE HEAVY CHECK MARK}": (self.deposit(100), "Collect")
+                "\N{MONEY WITH WINGS}": (self.deposit(100), "Receive")
             })
         elif card == 5:
-            embed.description = "Pay school tax of M150"
+            embed.description = "Pay school fees of M50"
             await self.create_reaction_message(embed, **{
-                "\N{BANKNOTE WITH DOLLAR SIGN}": (self.withdraw(150), "Pay"),
+                "\N{BANKNOTE WITH DOLLAR SIGN}": (self.withdraw(50), "Pay"),
                 "\N{CROSS MARK}": (self.declare_bankruptcy(), "Declare bankruptcy")
             })
         elif card == 6:
@@ -520,22 +539,26 @@ class MonopolyPlayer:
                 "\N{MONEY WITH WINGS}": (self.deposit(100), "Collect")
             })
         elif card == 8:
-            embed.description = "Doctor's Fee\nPay M50"
+            embed.description = "Doctor's fee\nPay M50"
             await self.create_reaction_message(embed, **{
-                "\N{BANKNOTE WITH DOLLAR SIGN}": (self.withdraw(50), "Pay")
+                "\N{BANKNOTE WITH DOLLAR SIGN}": (self.withdraw(50), "Pay"),
+                "\N{CROSS MARK}": (self.declare_bankruptcy(), "Declare bankruptcy")
             })
         elif card == 9:
-            embed.description = "Get Out of Jail Free\n\nThis card my be kept until needed, or sold"
-            await self.create_reaction_message(embed, **{
-                "\N{WHITE HEAVY CHECK MARK}": (self.take_goojfc(), "Take")
-            })
+            if self.game.chest_has_jail_card:
+                embed.description = "Get Out of Jail Free\n\nThis card my be kept until needed, or sold"
+                await self.create_reaction_message(embed, **{
+                    "\N{WHITE HEAVY CHECK MARK}": (self.take_community_goojfc(), "Take")
+                })
+            else:
+                await self.draw_community_chest()
         elif card == 10:
             embed.description = "From sale of stock you get M45"
             await self.create_reaction_message(embed, **{
                 "\N{MONEY WITH WINGS}": (self.deposit(45), "Get")
             })
         elif card == 11:
-            embed.description = "Receive for services M25"
+            embed.description = "Receive M25 consultancy fee"
             await self.create_reaction_message(embed, **{
                 "\N{MONEY WITH WINGS}": (self.deposit(25), "Receive")
             })
@@ -565,6 +588,138 @@ class MonopolyPlayer:
                 "\N{BANKNOTE WITH DOLLAR SIGN}": (self.withdraw(total), "Pay"),
                 "\N{CROSS MARK}": (self.declare_bankruptcy(), "Declare bankruptcy")
             })
+        elif card == 17:
+            embed.description = "It is your birthday\nCollect M10 from every player"
+            await self.game.collect_from_everyone(self, 10)
+        elif card == 18:
+            embed.description = "Pay hospital fees of M100"
+            await self.create_reaction_message(embed, **{
+                "\N{BANKNOTE WITH DOLLAR SIGN}": (self.withdraw(100), "Pay"),
+                "\N{CROSS MARK}": (self.declare_bankruptcy(), "Declare bankruptcy")
+            })
+
+    async def draw_chance(self):
+        embed = discord.Embed(title="Chance Card", colour=discord.Colour.orange())
+        card = random.randint(1, 15)
+        if card == 1:
+            self.set_square(0)
+            self.passed_go = True
+            embed.description = "Advance to GO\nCollect M200"
+            await self.create_reaction_message(embed, **{
+                "\N{WHITE HEAVY CHECK MARK}": (self.evaluate_square(), "Advance")
+            })
+        elif card == 2:
+            if self.square >= 24:
+                self.passed_go = True
+            self.set_square(24)
+            embed.description = "Advance to Trafalgar Square\nIf you pass GO, collect M200"
+            await self.create_reaction_message(embed, **{
+                "\N{WHITE HEAVY CHECK MARK}": (self.evaluate_square(), "Advance")
+            })
+        elif card == 3:
+            self.set_square(39)
+            embed.description = "Advance to Mayfair"
+            await self.create_reaction_message(embed, **{
+                "\N{WHITE HEAVY CHECK MARK}": (self.evaluate_square(), "Advance")
+            })
+        elif card == 4:
+            if self.square >= 11:
+                self.passed_go = True
+            self.set_square(11)
+            embed.description = "Advance to Pall Mall\nIf you pass GO, collect M200"
+            await self.create_reaction_message(embed, **{
+                "\N{WHITE HEAVY CHECK MARK}": (self.evaluate_square(), "Advance")
+            })
+        elif card == 5:
+            if self.square >= 35:
+                self.passed_go = True
+            self.set_square(((self.square + 5) % 10) + 5)
+            self.double_rent = True
+            embed.description = "Advance to the nearest Station\nIf unowned, you may buy it from the bank\nIf owned, pay twice the usual rent"
+            await self.create_reaction_message(embed, **{
+                "\N{WHITE HEAVY CHECK MARK}": (self.evaluate_square(), "Advance")
+            })
+        elif card == 6:
+            if self.square < 12:
+                self.set_square(12)
+            elif self.square < 28:
+                self.set_square(28)
+            else:
+                self.passed_go = True
+                self.set_square(12)
+            self.set_square(((self.square + 5) % 10) + 5)
+            self.double_rent = True
+            embed.description = "Advance to the nearest Utation\nIf unowned, you may buy it from the bank\nIf owned, pay ten times the amount thrown"
+            await self.create_reaction_message(embed, **{
+                "\N{WHITE HEAVY CHECK MARK}": (self.evaluate_square(), "Advance")
+            })
+        elif card == 7:
+            embed.description = "Bank pays you dividend of M50"
+            await self.create_reaction_message(embed, **{
+                "\N{MONEY WITH WINGS}": (self.deposit(50), "Receive")
+            })
+        elif card == 8:
+            if self.game.chance_has_jail_card:
+                embed.description = "Get Out of Jail Free\n\nThis card my be kept until needed, or sold"
+                await self.create_reaction_message(embed, **{
+                    "\N{WHITE HEAVY CHECK MARK}": (self.take_chance_goojfc(), "Take")
+                })
+            else:
+                await self.draw_community_chest()
+        elif card == 9:
+            self.move(-3)
+            embed.description = "Go back three spaces"
+            await self.create_reaction_message(embed, **{
+                "\N{WHITE HEAVY CHECK MARK}": (self.evaluate_square(), "Go back")
+            })
+        elif card == 10:
+            embed.description = "GO TO JAIL\nGo directly to jail\nDo not pass GO\nDo not collect M200"
+            await self.create_reaction_message(embed, **{
+                "\N{WHITE HEAVY CHECK MARK}": (self.go_to_jail(), "Go")
+            })
+        elif card == 11:
+            embed.description = "Make general repairs on all your property\nFor each house pay M25\nFor each hotel pay M100"
+            total = 25 * self.num_houses() + 100 * self.num_hotels()
+            embed.add_field(name="Total", value=f"M{total}", inline=False)
+            await self.create_reaction_message(embed, **{
+                "\N{BANKNOTE WITH DOLLAR SIGN}": (self.withdraw(total), "Pay"),
+                "\N{CROSS MARK}": (self.declare_bankruptcy(), "Declare bankruptcy")
+            })
+        elif card == 12:
+            embed.description = "Speeding fine M15"
+            await self.create_reaction_message(embed, **{
+                "\N{BANKNOTE WITH DOLLAR SIGN}": (self.withdraw(15), "Pay"),
+                "\N{CROSS MARK}": (self.declare_bankruptcy(), "Declare bankruptcy")
+            })
+        elif card == 13:
+            embed.description = "Take a trip to Kings Cross Station\nIf you pass GO, collect M200"
+            if self.square >= 5:
+                self.passed_go = True
+            self.set_square(5)
+            await self.create_reaction_message(embed, **{
+                "\N{WHITE HEAVY CHECK MARK}": (self.evaluate_square(), "Take a trip")
+            })
+        elif card == 14:
+            embed.description = "You have been elected Chairman of the Board\nPay each player M50"
+            total = 50 * (len(self.game.monopoly_players) - 1)
+            embed.add_field(name="Total", value=f"M{total}", inline=False)
+            await self.create_reaction_message(embed, **{
+                "\N{BANKNOTE WITH DOLLAR SIGN}": (self.elected_chairman(), "Pay"),
+                "\N{CROSS MARK}": (self.declare_bankruptcy(), "Declare bankruptcy")
+            })
+        elif card == 15:
+            embed.description = "Your building loan matures\nCollect M150"
+            await self.create_reaction_message(embed, **{
+                "\N{MONEY WITH WINGS}": (self.deposit(150), "Collect")
+            })
+
+    async def elected_chairman(self):
+        if self.withdraw(50 * (len(self.game.monopoly_players) - 1)):
+            self.reaction_message = None
+            for player in self.game.monopoly_players:
+                if player != self:
+                    player.deposit(50)
+            await self.confirm_end_turn()
 
     def num_houses(self):
         result = 0
@@ -582,8 +737,14 @@ class MonopolyPlayer:
                 result += p.hotel
         return result
 
-    async def take_goojfc(self):
-        self.goojfc += 1
+    async def take_community_goojfc(self):
+        self.game.chest_has_jail_card = False
+        self.chest_jail_card = True
+        await self.confirm_end_turn()
+
+    async def take_chance_goojfc(self):
+        self.game.chance_has_jail_card = False
+        self.chance_jail_card = True
         await self.confirm_end_turn()
 
     async def go_to_jail(self):
@@ -646,10 +807,15 @@ class MonopolyPlayer:
                 else:
                     await self.game.new_turn()
         elif choice == "card" and not self.turns_in_jail == 3:
-            if self.goojfc:
+            if self.chest_jail_card or self.chance_jail_card:
                 self.game.reaction_messages.remove(self.jail_message)
                 self.jail_message = None
-                self.goojfc -= 1
+                if self.chest_jail_card:
+                    self.chest_jail_card = False
+                    self.game.chest_has_jail_card = True
+                else:
+                    self.chance_jail_card = False
+                    self.game.chance_has_jail_card = True
                 self.set_square(10)
                 self.turns_in_jail = 0
                 await self.game.new_turn()
@@ -1242,11 +1408,17 @@ class MonopolyProperty:
     def can_sell_hotel(self):
         return self.hotel
 
-    def get_rent(self, roll):
+    def get_rent(self, roll, double_rent=False):
         if self.group == "station":
-            return 25 * self.owner.stations
+            if not double_rent:
+                return 25 * self.owner.stations
+            else:
+                return 50 * self.owner.stations
         elif self.group == "utility":
-            return (4, 10)[self.owner.utilities-1] * roll
+            if not double_rent:
+                return (4, 10)[self.owner.utilities-1] * roll
+            else:
+                return 10 * roll
         else:
             if self.hotel:
                 return self.rent[5]
