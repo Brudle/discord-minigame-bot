@@ -2,7 +2,7 @@ import asyncio
 from asyncio.coroutines import iscoroutine
 import discord
 from discord import message
-from discord.ext.commands import command, Cog, Greedy
+from discord.ext.commands import command, group, Cog, Greedy
 import random
 import collections
 from game import Game, games
@@ -1260,7 +1260,7 @@ class MonopolyPlayer:
             embed.add_field(name="Interest", value=f"M{mortgageable[property-1].price//20}")
             embed.add_field(name="Total Price", value=f"M{(mortgageable[property-1]//20)*11}")
             await self.create_reaction_message(embed, **{
-                "\N{MONEYBAG}": (self.confirm_unmortgage(mortgageable[property-1]), "Unmortgage property"),
+                "\N{MONEY BAG}": (self.confirm_unmortgage(mortgageable[property-1]), "Unmortgage property"),
                 "\N{CROSS MARK}": (self.cancel_unmortgage(), "Cancel")
             })
             return True
@@ -1291,6 +1291,149 @@ class MonopolyPlayer:
         embed.set_author(name=self.user.name, icon_url=self.user.avatar_url)
         await self.game.channel.send(embed=embed)
         await self.confirm_end_turn()
+
+    async def trade(self, user):
+        for player in self.game.monopoly_players:
+            if player.user == user:
+                self.trading_with = player
+                break
+        else:
+            return False
+        self.trade_offering = [0, [], 0]
+        self.trade_asking = [0, [], 0]
+        await self.trade_update()
+
+    async def trade_update(self):
+        embed = discord.Embed(title="Trade", colour=self.colour)
+        embed.add_field(name="Available to Trade", value="-", inline=False)
+        embed.add_field(name="Your Cash", value=f"M{self.balance}")
+        embed.add_field(name=f"{self.trading_with.user.name}'s Cash", value=f"M{self.trading_with.balance}")
+        prop_str = "\n".join(f"{i+1:<3} - {p.name}" for i, p in enumerate(
+            list(filter(lambda p: p.owner == self and p not in self.trade_offering[1] and not p.houses and not p.hotel, self.game.properties.values()))))
+        embed.add_field(name="Your Property", value=prop_str or "None", inline=False)
+        prop_str = "\n".join(f"{i+1:<3} - {p.name}" for i, p in enumerate(
+            list(filter(lambda p: p.owner == self.trading_with and p not in self.trade_asking and not p.houses and not p.hotel, self.game.properties.values()))))
+        embed.add_field(name=f"{self.trading_with.user.name}'s' Property", value=prop_str or "None")
+        embed.add_field(name="Your Get Out of Jail Free Cards", value=str(len(list(filter(None, [self.chest_jail_card, self.chance_jail_card])))), inline=False)
+        embed.add_field(name=f"{self.trading_with.user.name}'s Get Out of Jail Free Cards",
+        value=str(len(list(filter(None, [self.trading_with.chest_jail_card, self.trading_with.chance_jail_card])))))
+        embed.add_field(name="Current Trade", value="-", inline=False)
+        embed.add_field(name="Offering Cash", value=f"M{self.trade_offering[0]}")
+        embed.add_field(name="Asking Cash", value=f"M{self.trade_asking[0]}")
+        prop_str = "\n".join(f"{i+1:<3} - {p.name}" for i, p in enumerate(self.trade_offering[1]))
+        embed.add_field(name="Offering Property", value=prop_str or "None", inline=False)
+        prop_str = "\n".join(f"{i+1:<3} - {p.name}" for i, p in enumerate(self.trade_asking[1]))
+        embed.add_field(name="Asking Property", value=prop_str or "None")
+        embed.add_field(name="Offering Get Out of Jail Free Cards", value=str(self.trade_offering[2]), inline=False)
+        embed.add_field(name="Asking Get Out of Jail Free Cards", value=str(self.trade_asking[2]))
+        embed.set_author(name=self.user.name, icon_url=self.user.avatar_url)
+        embed.set_footer(text=self.trading_with.user.name, icon_url=self.trading_with.user.avatar_url)
+        if self.reaction_message:
+            await self.reaction_message.edit(embed=embed)
+        else:
+            await self.create_reaction_message(embed, **{
+                "\N{WHITE HEAVY CHECK MARK}": (self.trade_send(), "Send trade offer"),
+                "\N{CROSS MARK}": (self.trade_cancel, "Cancel trade")
+            })
+
+    async def trade_offer_cash(self, amount):
+        if amount > 0 and amount <= self.balance:
+            self.trade_offering[0] = amount
+            await self.trade_update()
+
+    async def trade_ask_cash(self, amount):
+        if amount > 0 and amount < self.trading_with.balance:
+            self.trade_asking[0] = amount
+            await self.trade_update()
+
+    async def trade_offer_add_property(self, property):
+        for i, p in enumerate(list(filter(
+            lambda p: p.owner == self and p not in self.trade_offering[1] and not p.houses and not p.hotel, self.game.properties.values()))):
+            if i + 1 == property:
+                self.trade_offering[1].append(p)
+                await self.trade_update()
+                break
+
+    async def trade_offer_remove_property(self, property):
+        for i, p in enumerate(self.trade_offering[1]):
+            if i + 1 == property:
+                self.trade_offering[1].remove(p)
+                await self.trade_update()
+                break
+
+    async def trade_ask_add_property(self, property):
+        for i, p in enumerate(list(filter(
+            lambda p: p.owner == self.trading_with and p not in self.trade_asking[1] and not p.houses and not p.hotel, self.game.properties.values()))):
+            if i + 1 == property:
+                self.trade_asking[1].append(p)
+                await self.trade_update()
+                break
+
+    async def trade_ask_remove_property(self, property):
+        for i, p in enumerate(self.trade_asking[1]):
+            if i + 1 == property:
+                self.trade_asking[1].remove(p)
+                await self.trade_update()
+                break
+
+    async def trade_offer_card(self, amount):
+        if amount > 0 and amount <= len(list(filter(None, [self.chest_jail_card, self.chance_jail_card]))):
+            self.trade_offering[2] == amount
+            await self.trade_update()
+
+    async def trade_ask_card(self, amount):
+        if amount >0 and amount <= len(list(filter(None, [self.trading_with.chest_jail_card, self.trading_with.chance_jail_card]))):
+            self.trade_asking[2] == amount
+            await self.trade_update()
+
+    async def trade_send(self):
+        self.reaction_message = None
+        await self.trading_with.trade_receive(self)
+
+    async def trade_cancel(self):
+        self.reaction_message = None
+        embed = discord.Embed(title="Trade Cancelled", colour=self.colour)
+        embed.set_author(name=self.user.name, icon_url=self.user.avatar_url)
+        await self.game.channel.send(embed=embed)
+
+    async def trade_receive(self, player):
+        self.trading_with = player
+        self.trade_offering = player.trade_asking
+        self.trade_asking = player.trade_offering
+        embed = discord.Embed(title="Received a Trade Offer", colour=self.colour)
+        embed.add_field(name="Offering Cash", value=f"M{self.trade_asking[0]}")
+        embed.add_field(name="Asking Cash", value=f"M{self.trade_offering[0]}")
+        prop_str = "\n".join(f"{p.name}" for p in self.trade_asking[1])
+        embed.add_field(name="Offering Property", value=prop_str or "None", inline=False)
+        prop_str = "\n".join(f"{p.name}" for p in self.trade_offering[1])
+        embed.add_field(name="Asking Property", value=prop_str or "None")
+        embed.add_field(name="Offering Get Out of Jail Free Cards", value=str(self.trade_asking[2]), inline=False)
+        embed.add_field(name="Asking Get Out of Jail Free Cards", value=str(self.trade_offering[2]))
+        embed.set_author(name=self.user.name, icon_url=self.user.avatar_url)
+        embed.set_footer(text=self.trading_with.user.name, icon_url=self.trading_with.user.avatar_url)
+        await self.create_reaction_message(embed, **{
+            "\N{WHITE HEAVY CHECK MARK}": (self.trade_accept(), "Accept trade"),
+            "\N{CROSS MARK}": (self.trade_decline(), "Decline trade"),
+            "\N{ANTICLOCKWISE DOWNWARDS AND UPWARDS OPEN CIRCLE ARROWS}": (self.trade_counter(), "Make a counter offer")
+        })
+
+    async def trade_accept(self):
+        self.reaction_message = None
+        if self.trade_asking[0]:
+            if not self.trading_with.withdraw(self.trade_asking[0]):
+                return False
+        if self.trade_offering[0]:
+            if not self.withdraw(self.trade_offering[0]):
+                return False
+        await self.receive_property(self.trade_asking[1])
+        await self.trading_with.receive_property(self.trade_offering[1])
+
+    async def trade_decline(self):
+        self.reaction_message = None
+
+    async def trade_counter(self):
+        self.reaction_message = None
+        await self.trade_update()
 
     async def rolled(self, roll1, roll2):
         self.roll = roll1 + roll2
@@ -1738,3 +1881,95 @@ class Monopoly(Cog):
                 for player in game.monopoly_players:
                     if player.user == ctx.author:
                         await player.unmortgage(property)
+
+    @group()
+    async def trade(self, ctx):
+        pass
+
+    @trade.command()
+    async def start(self, ctx, user: discord.Member):
+        for game in games:
+            if type(game) == MonopolyGame:
+                for player in game.monopoly_players:
+                    if player.user == ctx.author:
+                        await player.trade(user)
+
+    @trade.group()
+    async def offer(self, ctx):
+        pass
+
+    @offer.command(aliases=["casj"])
+    async def cash_offer(self, ctx, amount: int):
+        for game in games:
+            if type(game) == MonopolyGame:
+                for player in game.monopoly_players:
+                    if player.user == ctx.author:
+                        await player.trade_offer_cash(amount)
+
+    @offer.group(aliases=["property"])
+    async def property_offer(self, ctx):
+        pass
+
+    @property_offer.command(aliases=["add"])
+    async def add_offer(self, ctx, property: int=None):
+        for game in games:
+            if type(game) == MonopolyGame:
+                for player in game.monopoly_players:
+                    if player.user == ctx.author:
+                        await player.trade_offer_add_property(property)
+
+    @property_offer.command(aliases=["remove"])
+    async def remove_offer(self, ctx, property: int=None):
+        for game in games:
+            if type(game) == MonopolyGame:
+                for player in game.monopoly_players:
+                    if player.user == ctx.author:
+                        await player.trade_offer_remove_property(property)
+
+    @offer.command(aliases=["card"])
+    async def card_offer(self, ctx, amount: int):
+        for game in games:
+            if type(game) == MonopolyGame:
+                for player in game.monopoly_players:
+                    if player.user == ctx.author:
+                        await player.trade_offer_card(amount)
+
+    @trade.group()
+    async def ask(self, ctx):
+        pass
+
+    @ask.command(aliases=["cash"])
+    async def cash_ask(self, ctx, amount: int):
+        for game in games:
+            if type(game) == MonopolyGame:
+                for player in game.monopoly_players:
+                    if player.user == ctx.author:
+                        await player.trade_offer_cash(amount)
+
+    @ask.group(aliases=["property"])
+    async def property_ask(self, ctx):
+        pass
+
+    @property_ask.command(aliases=["add"])
+    async def add_ask(self, ctx, property: int):
+        for game in games:
+            if type(game) == MonopolyGame:
+                for player in game.monopoly_players:
+                    if player.user == ctx.author:
+                        await player.trade_ask_add_property(property)
+
+    @property_ask.command(aliases=["remove"])
+    async def remove_ask(self, ctx, property: int):
+        for game in games:
+            if type(game) == MonopolyGame:
+                for player in game.monopoly_players:
+                    if player.user == ctx.author:
+                        await player.trade_ask_remove_property(property)
+
+    @ask.command(aliases=["card"])
+    async def card_ask(self, ctx, amount: int):
+        for game in games:
+            if type(game) == MonopolyGame:
+                for player in game.monopoly_players:
+                    if player.user == ctx.author:
+                        await player.trade_offer_card(amount)
