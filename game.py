@@ -9,7 +9,8 @@ emojis["cross"] = "\N{CROSS MARK}"
 
 class Game:
 
-    def __init__(self, channel, creator, minplayers=None, maxplayers=None):
+    def __init__(self, name, channel, creator, minplayers=None, maxplayers=None):
+        self.name = name
         self.channel = channel
         self.creator = creator
         self.minplayers = minplayers
@@ -18,10 +19,11 @@ class Game:
         self.invited = set()
         self.declined = set()
         self.reaction_messages = []
+        self.reaction_message = None
         self.lobby_done = False
 
     async def update_lobby(self):
-        embed = discord.Embed(title="Battleships Lobby",
+        embed = discord.Embed(title=f"{self.name} Lobby",
         description="invitation response can be changed any number of times",
         colour=discord.Colour.green())
         embed.add_field(name="Players", value="\n".join([p.name for p in self.players]), inline=True)
@@ -109,6 +111,40 @@ class Game:
         self.lobby_done = True
         await self.channel.send("game cancelled")
 
+    async def create_reaction_message(self, embed: discord.Embed, reactions: dict):
+        embed.add_field(name="Reaction", value="\n".join(reactions.keys()))
+        embed.add_field(name="Action", value="\n".join(r[1] for r in reactions.values()))
+        message = await self.channel.send(embed=embed)
+        for reaction in reactions:
+            await message.add_reaction(reaction)
+        self.reactions = {r: reactions[r][0] for r in reactions}
+        self.reaction_message = message
+
+class Player:
+
+    def __init__(self, user: discord.Member, game: Game):
+        self.user = user
+        self.game = game
+        self.name = self.user.nick or self.user.name
+        self.colour = discord.Colour.default()
+
+    def set_colour(self, colour: discord.Colour):
+        self.colour = colour
+
+    async def send_as_author(self, embed: discord.Embed, file: discord.File=None) -> discord.Message:
+        embed.colour = self.colour
+        embed.set_author(name=self.name, icon_url=self.user.avatar_url)
+        return await self.game.channel.send(embed=embed, file=file)
+
+    async def create_reaction_message(self, embed: discord.Embed, reactions, file: discord.File=None):
+        embed.add_field(name="React", value="\n".join(reactions.keys()))
+        embed.add_field(name="Action", value="\n".join(r[1] for r in reactions.values()))
+        message = await self.send_as_author(embed, file)
+        for reaction in reactions:
+            await message.add_reaction(reaction)
+        self.reaction_message = message
+        self.reactions = {r: reactions[r][1] for r in reactions}
+
 class GameCog(Cog):
 
     def __init__(self, bot):
@@ -131,6 +167,13 @@ class GameCog(Cog):
                             await game.decline_invite(user)
                 elif reaction.message in game.reaction_messages:
                     await game.reaction_add(reaction, user)
+                else:
+                    for player in game.players:
+                        if player.user == user:
+                            if game.reaction_message == reaction.message and reaction.emoji in game.reactions:
+                                await game.reactions(reaction.emoji)(player)
+                            elif player.reaction_message == reaction.message and reaction.emoji in player.reactions:
+                                await player.reactions(reaction.emoji)
 
     @Cog.listener()
     async def on_reaction_remove(self, reaction, user):

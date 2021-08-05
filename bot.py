@@ -12,7 +12,7 @@ intents.guild_messages = True
 bot = commands.Bot(command_prefix='!bm ',  intents=intents)
 bot.add_cog(game.GameCog(bot))
 bot.add_cog(battleships.BattleshipsCog(bot))
-bot.add_cog(monopoly.Monopoly(bot))
+bot.add_cog(monopoly.cog.Monopoly(bot))
 bot.add_cog(misc.MiscCog(bot))
 
 @bot.event
