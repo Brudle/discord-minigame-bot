@@ -1,7 +1,7 @@
 import discord
-from discord.ext.commands import command, group, Cog
+from discord.ext.commands import command, group, Cog, Greedy
 from game import games
-from game import MonopolyGame
+from monopoly.game import MonopolyGame
 
 class Monopoly(Cog):
 
@@ -17,7 +17,7 @@ class Monopoly(Cog):
         return None, None
 
     @command()
-    async def monopoly(self, ctx, users: discord.Greedy[discord.Member]=None):
+    async def monopoly(self, ctx, users: Greedy[discord.Member]=None):
         game = MonopolyGame(ctx.channel, ctx.author)
         await game.update_lobby()
         games.append(game)

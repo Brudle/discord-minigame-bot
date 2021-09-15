@@ -3,7 +3,7 @@ from PIL import Image
 import random
 
 from game import Player
-from models import MonopolyProperty
+from monopoly.models import MonopolyProperty
 
 class MonopolyPlayer(Player):
 
@@ -19,7 +19,7 @@ class MonopolyPlayer(Player):
         self.balance = 1500
         self.turns_in_jail = 0
         self.rent = 0
-        self.roll = 0
+        self.rolls = 0
         self.stations = 0
         self.utilities = 0
         self.rent_message = None

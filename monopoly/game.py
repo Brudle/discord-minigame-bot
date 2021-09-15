@@ -2,8 +2,8 @@ import discord
 import random
 
 from game import Game
-from player import MonopolyPlayer
-from models import MonopolyBoard, MonopolyProperty
+from monopoly.player import MonopolyPlayer
+from monopoly.models import MonopolyBoard, MonopolyProperty
 
 class MonopolyGame(Game):
 
